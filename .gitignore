@@ -203,6 +203,11 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Local FastAPI/SQLite artifacts
+app.db
+*.db-journal
+uvicorn.*.log
+
 # Ruff stuff:
 .ruff_cache/
 
