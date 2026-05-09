@@ -23,7 +23,7 @@ function LoginPage() {
       const tokenData = await login(form);
       localStorage.setItem("access_token", tokenData.access_token);
       const user = await getMe();
-      navigate(user.role === "teacher" ? "/teacher/home" : "/student/home");
+      navigate(user.role === "teacher" ? "/teacher/dashboard" : "/student/home");
     } catch (error) {
       setMessage(error.message);
     } finally {
