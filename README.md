@@ -1,69 +1,57 @@
 # Smart Lecture Analysis
 
-교수자가 강의 PDF를 업로드하면 핵심 개념을 분석하고, 자동 퀴즈와 수업 리포트를 제공하는 스마트 강의 분석 서비스 프로토타입입니다.  
-현재는 **React 프론트엔드**와 **FastAPI 인증 백엔드**를 기반으로 학생/교수 역할별 화면을 분리해 구현했습니다.
+스마트 강의 분석 시스템은 교수자가 업로드한 강의 PDF를 분석해 자동 퀴즈와 수업 리포트를 제공하는 서비스 프로토타입입니다.  
+PDF 분석 → 자동 퀴즈 생성 → 학생 응답 수집 → 실시간 오답 분석 → 수업 리포트 생성 흐름을 목표로 합니다.
 
-## 주요 기능
+## 핵심 기능
 
 ### 학생 기능
 
-- 로그인 / 회원가입
-- 교수자가 업로드한 PDF 자료와 추출 개념 확인
-- 퀴즈 풀이 화면
-- 익명 질문 작성
-- 내 퀴즈 결과 확인
+- 실시간 퀴즈 응답
+- 강의 피드백
+- 익명 질문
 
 ### 교수 기능
 
-- PDF 업로드 화면
-- 추출 개념 확인
-- 자동 생성 퀴즈 확인 및 배포 화면
-- 실시간 오답률 대시보드
-- 익명 질문 확인
-- mock 데이터 기반 수업 리포트 확인
+- PDF 업로드
+- 자동 퀴즈 생성
+- 실시간 오답률 분석
+- 수업 리포트 확인
+
+## 시스템 흐름
+
+```text
+PDF 업로드
+→ 키워드 추출
+→ 퀴즈 생성
+→ 학생 응답 수집
+→ 실시간 오답 분석
+→ 리포트 생성
+```
 
 ## 기술 스택
 
 | 영역 | 기술 |
 | --- | --- |
-| Frontend | React, Vite, React Router |
-| Backend | FastAPI, SQLAlchemy |
+| Frontend | React + Vite |
+| Backend | FastAPI |
 | Database | SQLite |
-| Auth | JWT, bcrypt |
-| API Docs | Swagger UI |
-
-## 프로젝트 구조
-
-```text
-smart-lecture-analysis/
-├── frontend/   # React + Vite 프론트엔드
-├── backend/    # FastAPI 백엔드
-└── README.md
-```
+| Auth | JWT |
+| PDF Parsing | PyMuPDF |
+| Keyword Extraction | TF-IDF |
+| Realtime | WebSocket |
 
 ## 실행 방법
 
-### Backend 실행
-
-```bash
-cd backend
-python -m venv venv
-```
-
-Windows PowerShell:
+### Backend
 
 ```powershell
+cd backend
 .\venv\Scripts\Activate.ps1
+python -m uvicorn main:app --reload
 ```
 
-패키지 설치 및 서버 실행:
-
-```bash
-pip install -r requirements.txt
-uvicorn main:app --reload
-```
-
-### Frontend 실행
+### Frontend
 
 ```bash
 cd frontend
@@ -75,24 +63,15 @@ npm run dev
 
 | 구분 | 주소 |
 | --- | --- |
-| Frontend | http://127.0.0.1:5173 |
+| Frontend | http://localhost:5173 |
 | Backend API | http://127.0.0.1:8000 |
 | Swagger Docs | http://127.0.0.1:8000/docs |
 
 ## 현재 구현 상태
 
-| 항목 | 상태 |
-| --- | --- |
-| JWT 로그인 / 회원가입 | 구현 완료 |
-| 역할 기반 화면 분리 | 구현 완료 |
-| 학생 퀴즈 UI | 구현 완료 |
-| 교수 대시보드 UI | 구현 완료 |
-| 수업 리포트 UI | mock 데이터 기반 구현 |
-| PDF 분석 | 추후 구현 예정 |
-| 자동 퀴즈 생성 API | 추후 구현 예정 |
-| 실시간 응답 수집 | 추후 구현 예정 |
-
-## 참고
-
-- 백엔드 상세 설명: [backend/README.md](backend/README.md)
-- 프론트엔드 상세 설명: [frontend/README.md](frontend/README.md)
+- 역할 기반 학생/교수 화면 분리
+- 로그인 / 회원가입
+- JWT 인증
+- 실시간 퀴즈 프로토타입 UI
+- 교수 대시보드 UI
+- 수업 리포트 UI
