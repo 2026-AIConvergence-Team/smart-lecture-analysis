@@ -1,65 +1,110 @@
 # Smart Lecture Analysis Backend
 
-교수자와 학생이 사용하는 스마트 강의 분석 시스템의 공통 인증 백엔드입니다.
+교수자가 강의 PDF를 업로드하면 개념 분석, 자동 퀴즈 생성, 학생 응답 수집, 교수 대시보드와 리포트 제공까지 이어지는 **스마트 강의 분석 시스템**의 백엔드 프로젝트입니다.
 
-FastAPI, SQLAlchemy, SQLite, bcrypt, JWT를 사용해 회원가입, 로그인, 내 정보 조회 기능을 제공합니다.
+현재 버전은 팀 프로젝트의 공통 기반이 되는 **회원가입, 로그인, JWT 인증, 내 정보 조회** 기능을 제공합니다.
 
-## 기능
+## 사용 기술
 
-- `GET /health`: 서버 상태 확인
-- `POST /auth/signup`: 회원가입
-- `POST /auth/login`: 로그인 후 JWT 토큰 발급
-- `GET /users/me`: 로그인한 사용자 정보 조회
+| 기술 | 설명 |
+| --- | --- |
+| FastAPI | Python 기반 웹 API 프레임워크 |
+| SQLite | 가볍게 사용할 수 있는 파일 기반 데이터베이스 |
+| SQLAlchemy | Python ORM, 데이터베이스 모델 관리 |
+| bcrypt | 비밀번호 해시 처리 |
+| JWT | 로그인 사용자 인증 토큰 |
+| Swagger UI | API 문서 확인 및 테스트 |
 
-## 파일 구조
+## 폴더 구조
 
 ```text
 backend/
-  main.py
-  database.py
-  models.py
-  schemas.py
-  auth.py
-  users.py
-  requirements.txt
-  README.md
+├── main.py              # FastAPI 앱 시작 파일, 라우터 등록
+├── database.py          # SQLite 연결, DB 세션 설정
+├── models.py            # SQLAlchemy User 모델
+├── schemas.py           # 요청/응답 Pydantic 스키마
+├── auth.py              # 비밀번호 해시, JWT 생성/검증
+├── users.py             # 사용자 관련 API
+├── requirements.txt     # 필요한 Python 패키지 목록
+└── README.md            # 프로젝트 설명 문서
 ```
 
 ## 실행 방법
 
-가상환경이 없다면 먼저 생성합니다.
+아래 명령어는 `backend` 폴더에서 실행합니다.
+
+```bash
+cd backend
+```
+
+### 1. 가상환경 생성
 
 ```bash
 python -m venv venv
 ```
 
-Windows PowerShell 기준으로 가상환경을 실행합니다.
+### 2. 가상환경 실행
 
-```bash
+Windows PowerShell:
+
+```powershell
 .\venv\Scripts\Activate.ps1
 ```
 
-필요한 패키지를 설치합니다.
+Windows CMD:
+
+```cmd
+venv\Scripts\activate.bat
+```
+
+macOS 또는 Linux:
+
+```bash
+source venv/bin/activate
+```
+
+### 3. 패키지 설치
 
 ```bash
 pip install -r requirements.txt
 ```
 
-FastAPI 서버를 실행합니다.
+### 4. 서버 실행
 
 ```bash
 uvicorn main:app --reload
 ```
 
-서버가 실행되면 아래 주소에서 Swagger 문서를 확인할 수 있습니다.
+실행에 성공하면 터미널에 아래와 비슷한 메시지가 표시됩니다.
+
+```text
+Uvicorn running on http://127.0.0.1:8000
+```
+
+## Swagger 주소
+
+브라우저에서 아래 주소로 접속하면 API를 직접 테스트할 수 있습니다.
 
 ```text
 http://127.0.0.1:8000/docs
 ```
 
+## 구현된 API 목록
+
+| Method | URL | 인증 필요 | 설명 |
+| --- | --- | --- | --- |
+| GET | `/health` | 아니오 | 서버 상태 확인 |
+| POST | `/auth/signup` | 아니오 | 회원가입 |
+| POST | `/auth/login` | 아니오 | 로그인 및 JWT 토큰 발급 |
+| GET | `/users/me` | 예 | 현재 로그인한 사용자 정보 조회 |
+
 ## Swagger 테스트 순서
 
-1. `POST /auth/signup`으로 회원가입합니다.
+### 1. 회원가입
+
+`POST /auth/signup`을 실행합니다.
+
+요청 예시:
 
 ```json
 {
@@ -70,9 +115,18 @@ http://127.0.0.1:8000/docs
 }
 ```
 
-`role`은 `teacher` 또는 `student`만 사용할 수 있습니다.
+`role`은 아래 두 값 중 하나만 사용할 수 있습니다.
 
-2. `POST /auth/login`으로 로그인합니다.
+```text
+teacher
+student
+```
+
+### 2. 로그인
+
+`POST /auth/login`을 실행합니다.
+
+요청 예시:
 
 ```json
 {
@@ -90,18 +144,45 @@ http://127.0.0.1:8000/docs
 }
 ```
 
-3. Swagger 오른쪽 위 `Authorize` 버튼을 누르고 토큰을 입력합니다.
+### 3. JWT 토큰 등록
+
+Swagger 화면 오른쪽 위의 `Authorize` 버튼을 누릅니다.
+
+입력창에 로그인 응답으로 받은 토큰 값을 넣습니다.
 
 ```text
 JWT_TOKEN_VALUE
 ```
 
-`curl`이나 프론트엔드에서 직접 호출할 때는 `Authorization: Bearer JWT_TOKEN_VALUE` 헤더를 사용합니다.
+프론트엔드나 curl에서 직접 요청할 때는 아래 헤더 형식으로 보냅니다.
 
-4. `GET /users/me`를 실행해 현재 로그인한 사용자 정보를 확인합니다.
+```text
+Authorization: Bearer JWT_TOKEN_VALUE
+```
 
-## SQLite DB
+### 4. 내 정보 조회
 
-서버를 처음 실행하면 `app.db` 파일이 자동으로 생성됩니다.
+`GET /users/me`를 실행하면 현재 로그인한 사용자의 정보를 확인할 수 있습니다.
 
-학습용 프로젝트라서 `SECRET_KEY`는 `auth.py`에 간단히 작성되어 있습니다. 실제 서비스에서는 환경 변수로 분리해야 합니다.
+응답 예시:
+
+```json
+{
+  "id": 1,
+  "email": "teacher@example.com",
+  "name": "Kim Teacher",
+  "role": "teacher"
+}
+```
+
+## 데이터베이스
+
+이 프로젝트는 SQLite를 사용합니다.
+
+서버를 처음 실행하면 `backend/app.db` 파일이 자동으로 생성됩니다. 별도의 데이터베이스 서버를 설치하지 않아도 되기 때문에 초보자가 실습하기 좋습니다.
+
+## 참고 사항
+
+현재 `SECRET_KEY`는 학습용으로 `auth.py` 파일에 직접 작성되어 있습니다. 실제 서비스에서는 `.env` 같은 환경 변수 파일로 분리하는 것이 좋습니다.
+
+비밀번호는 원문으로 저장하지 않고 bcrypt로 해시한 값만 데이터베이스에 저장합니다.
