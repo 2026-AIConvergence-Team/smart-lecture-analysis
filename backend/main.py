@@ -1,4 +1,5 @@
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from auth import create_access_token, hash_password, verify_password
@@ -14,6 +15,14 @@ app = FastAPI(
     title="Smart Lecture Analysis Auth API",
     description="SQLite 기반 FastAPI 인증 예제",
     version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(users_router)
