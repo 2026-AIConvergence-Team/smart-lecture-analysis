@@ -95,8 +95,9 @@ http://127.0.0.1:8000/docs
 | --- | --- | --- | --- |
 | GET | `/health` | 아니오 | 서버 상태 확인 |
 | POST | `/auth/signup` | 아니오 | 회원가입 |
-| POST | `/auth/login` | 아니오 | 로그인 및 JWT 토큰 발급 |
-| GET | `/users/me` | 예 | 현재 로그인한 사용자 정보 조회 |
+| POST | /auth/login | 아니오 | 로그인 및 JWT 토큰 발급 |
+| POST | /auth/logout | 예 | 로그아웃 |
+| GET | /users/me | 예 | 현재 로그인 사용자 정보 조회 |
 
 ## Swagger 테스트 순서
 
@@ -174,6 +175,10 @@ Authorization: Bearer JWT_TOKEN_VALUE
   "role": "teacher"
 }
 ```
+
+### 5. 로그아웃
+
+POST /auth/logout 을 실행합니다.
 
 ## 데이터베이스
 
