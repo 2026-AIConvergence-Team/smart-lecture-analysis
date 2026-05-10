@@ -68,3 +68,8 @@ def login(login_data: UserLogin, db: Session = Depends(get_db)):
 
     access_token = create_access_token(data={"sub": str(user.id)})
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.post("/auth/logout", tags=["auth"])
+def logout():
+    return {"message": "Logged out successfully"}
