@@ -1,4 +1,6 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
+
+import { logout } from "../api/authApi.js";
 
 const navItems = {
   student: [
@@ -21,6 +23,18 @@ const navItems = {
 
 function RoleLayout({ role, title, subtitle, children }) {
   const isTeacher = role === "teacher";
+  const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch (error) {
+      console.error(error);
+    } finally {
+      localStorage.removeItem("access_token");
+      navigate("/login", { replace: true });
+    }
+  };
 
   return (
     <main className={`role-shell ${isTeacher ? "teacher-theme" : "student-theme"}`}>
@@ -36,7 +50,12 @@ function RoleLayout({ role, title, subtitle, children }) {
             </NavLink>
           ))}
         </nav>
-        <span className="role-badge">{isTeacher ? "교수자 모드" : "학생 모드"}</span>
+        <div className="role-actions">
+          <span className="role-badge">{isTeacher ? "교수자 모드" : "학생 모드"}</span>
+          <button className="logout-button" type="button" onClick={handleLogout}>
+            로그아웃
+          </button>
+        </div>
       </header>
 
       <section className="role-hero">

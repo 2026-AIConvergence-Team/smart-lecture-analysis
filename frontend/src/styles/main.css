@@ -274,6 +274,30 @@ a {
   font-weight: 800;
 }
 
+.role-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logout-button {
+  min-height: 34px;
+  padding: 0 12px;
+  color: #4b5651;
+  background: #ffffff;
+  border: 1px solid #cfd7d3;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.logout-button:hover {
+  color: #b43434;
+  border-color: #f0b7b7;
+  background: #fff5f5;
+}
+
 .student-theme .role-badge,
 .student-theme .role-hero {
   color: #0f755b;

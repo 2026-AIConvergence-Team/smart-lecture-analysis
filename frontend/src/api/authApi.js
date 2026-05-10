@@ -32,6 +32,12 @@ export function login(payload) {
   });
 }
 
+export function logout() {
+  return request("/auth/logout", {
+    method: "POST",
+  });
+}
+
 export function getMe() {
   const token = localStorage.getItem("access_token");
 
