@@ -2,7 +2,7 @@
 
 스마트 강의 분석 시스템의 실험용 프론트엔드 프로토타입입니다.
 
-React + Vite로 구성되어 있으며, 현재 백엔드의 인증 API와 연결할 수 있도록 로그인, 회원가입, 사용자 정보 조회 구조를 포함합니다. 퀴즈, 피드백, 교수 대시보드, 수업 리포트 화면은 mock data를 사용합니다.
+React + Vite로 구성되어 있으며, 현재 백엔드의 인증 API와 연결할 수 있도록 로그인, 회원가입, 로그아웃, 사용자 정보 조회 구조를 포함합니다. 퀴즈, 피드백, 교수 대시보드, 수업 리포트 화면은 mock data를 사용합니다.
 
 ## 사용 기술
 
@@ -67,9 +67,12 @@ http://127.0.0.1:8000
 
 - `POST /auth/signup`
 - `POST /auth/login`
+- `POST /auth/logout`
 - `GET /users/me`
 
 로그인 성공 시 `access_token`을 `localStorage`에 저장합니다.
+
+로그아웃 시 localStorage의 access_token을 제거합니다.
 
 `/users/me` 요청에는 아래 헤더를 사용합니다.
 
