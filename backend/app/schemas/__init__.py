@@ -11,6 +11,16 @@ from app.schemas.lecture import (
     TextExtractStartResponse,
     TextExtractStatusResponse,
 )
+from app.schemas.quiz import (
+    ManualQuizCreateRequest,
+    QuizGenerateRequest,
+    QuizGenerateResponse,
+    QuizGenerateStatusResponse,
+    QuizItemResponse,
+    QuizListResponse,
+    QuizStatusUpdateRequest,
+    QuizUpdateRequest,
+)
 from app.schemas.user import UserResponse
 
 __all__ = [
@@ -29,4 +39,12 @@ __all__ = [
     "LectureAnalyzeResponse",
     "ConceptDetail",
     "LectureConceptsResponse",
+    "QuizGenerateRequest",
+    "QuizGenerateResponse",
+    "QuizGenerateStatusResponse",
+    "QuizItemResponse",
+    "QuizListResponse",
+    "QuizUpdateRequest",
+    "ManualQuizCreateRequest",
+    "QuizStatusUpdateRequest",
 ]
