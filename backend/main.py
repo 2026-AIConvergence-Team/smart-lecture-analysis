@@ -7,6 +7,8 @@ from database import Base, engine, get_db
 from models import User
 from schemas import Token, UserCreate, UserLogin, UserResponse
 from users import router as users_router
+# 🚀 승연님 파트 1 라우터 import 추가
+from lectures import router as lecture_router
 
 
 Base.metadata.create_all(bind=engine)
@@ -25,7 +27,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 기존 다영님 라우터 유지
 app.include_router(users_router)
+# 🚀 승연님 강의 분석 엔진 라우터 등록 추가
+app.include_router(lecture_router)
 
 
 @app.get("/health", tags=["health"])
