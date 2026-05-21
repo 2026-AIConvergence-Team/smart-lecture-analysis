@@ -50,7 +50,7 @@ PDF 업로드
 ```powershell
 cd backend
 .\venv\Scripts\Activate.ps1
-python -m uvicorn main:app --reload
+python -m uvicorn app.main:app --reload
 ```
 
 ### Frontend
