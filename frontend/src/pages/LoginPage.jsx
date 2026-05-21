@@ -15,7 +15,8 @@ function LoginPage() {
       return;
     }
     setMessage("");
-    navigate("/app", { state: { role } });
+    const destination = role === "professor" ? "/teacher/courses" : "/student/courses";
+    navigate(destination);
   };
 
   return (
