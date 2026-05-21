@@ -18,6 +18,7 @@ from app.schemas.quiz import (
     QuizGenerateStatusResponse,
     QuizItemResponse,
     QuizListResponse,
+    QuizRegenerateRequest,
     QuizStatusUpdateRequest,
     QuizUpdateRequest,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "QuizGenerateStatusResponse",
     "QuizItemResponse",
     "QuizListResponse",
+    "QuizRegenerateRequest",
     "QuizUpdateRequest",
     "ManualQuizCreateRequest",
     "QuizStatusUpdateRequest",

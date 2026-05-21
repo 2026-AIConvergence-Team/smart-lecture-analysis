@@ -5,14 +5,17 @@ from datetime import datetime
 import os
 import fitz
 import json
-from sklearn.feature_extraction.text import TfidfVectorizer
 
 from app.db.session import get_db
 from app.core.deps import get_current_user
-from app.services.lecture.text_processing import (
-    extract_key_sentences,
-    extract_pure_tokens,
-    remove_headers,
+from app.repositories import (
+    concept_repository,
+    lecture_repository,
+    page_content_repository,
+)
+from app.services.lecture.lecture_processing import (
+    analyze_page_contents_to_concepts,
+    extract_pdf_text_to_page_contents,
 )
 import app.models as models
 import app.schemas as schemas
@@ -49,12 +52,10 @@ def create_lecture(
     )
 
     try:
-        db.add(new_lecture)
-        db.commit()
-        db.refresh(new_lecture)
+        lecture_repository.create_lecture(db, new_lecture)
         return new_lecture
     except Exception as e:
-        db.rollback()
+        lecture_repository.rollback(db)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": f"서버 내부 데이터베이스 오류: {str(e)}"}
@@ -74,7 +75,7 @@ async def upload_lecture_pdf(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture = db.query(models.Lecture).filter(models.Lecture.id == lecture_id).first()
+    lecture = lecture_repository.get_lecture_by_id(db, lecture_id)
     if not lecture:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -104,12 +105,11 @@ async def upload_lecture_pdf(
         lecture.pdf_url = f"/files/lectures/{lecture_id}/{file.filename}"
         lecture.total_pages = total_pages
         
-        db.commit()
-        db.refresh(lecture)
+        lecture_repository.save_lecture(db, lecture)
 
         return lecture
     except Exception as e:
-        db.rollback()
+        lecture_repository.rollback(db)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": f"서버에서 PDF 파일을 처리하는 중 오류가 발생했습니다: {str(e)}"}
@@ -127,7 +127,7 @@ async def start_text_extraction(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture = db.query(models.Lecture).filter(models.Lecture.id == lecture_id).first()
+    lecture = lecture_repository.get_lecture_by_id(db, lecture_id)
     if not lecture:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -148,35 +148,18 @@ async def start_text_extraction(
         )
 
     try:
-        lecture.extract_status = "extracting"
-        db.commit()
-
-        doc = fitz.open(file_path)
-        db.query(models.PageContent).filter(models.PageContent.lecture_id == lecture_id).delete()
-
-        for page_idx in range(doc.page_count):
-            page = doc.load_page(page_idx)
-            text_content = page.get_text()
-            
-            new_page_content = models.PageContent(
-                lecture_id=lecture_id,
-                page_num=page_idx + 1,
-                text_content=text_content if text_content.strip() else "[텍스트가 없는 페이지입니다.]"
-            )
-            db.add(new_page_content)
-
-        lecture.extract_status = "completed"
-        db.commit()
-        doc.close()
+        message = extract_pdf_text_to_page_contents(
+            db=db,
+            lecture=lecture,
+            lecture_id=lecture_id,
+            file_path=file_path,
+        )
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,
-            content={"message": "텍스트 추출 및 데이터베이스 저장이 완료되었습니다."}
+            content={"message": message}
         )
     except Exception as e:
-        db.rollback()
-        lecture.extract_status = "failed"
-        db.commit()
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": f"텍스트 추출 중 서버 오류 발생: {str(e)}"}
@@ -194,16 +177,17 @@ def extract_lecture_concepts(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture = db.query(models.Lecture).filter(models.Lecture.id == lecture_id).first()
+    lecture = lecture_repository.get_lecture_by_id(db, lecture_id)
     if not lecture:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={"error": "해당 강의를 찾을 수 없습니다."}
         )
 
-    page_contents = db.query(models.PageContent).filter(
-        models.PageContent.lecture_id == lecture_id
-    ).order_by(models.PageContent.page_num).all()
+    page_contents = page_content_repository.get_page_contents_by_lecture(
+        db,
+        lecture_id,
+    )
 
     if not page_contents:
         return JSONResponse(
@@ -212,83 +196,19 @@ def extract_lecture_concepts(
         )
 
     try:
-        lecture.analyze_status = "analyzing"
-        db.commit()
-
-        db.query(models.Concept).filter(models.Concept.lecture_id == lecture_id).delete()
-
-        valid_pages = {}
-        for pc in page_contents:
-            cleaned_text = remove_headers(pc.text_content)
-            if pc.text_content.strip() and len(cleaned_text.strip()) >= 50:
-                valid_pages[pc.page_num] = pc.text_content
-
-        if not valid_pages:
-            lecture.analyze_status = "completed"
-            db.commit()
-            return JSONResponse(
-                status_code=status.HTTP_200_OK,
-                content={"message": "분석할 수 있는 유효한 텍스트 페이지가 존재하지 않습니다."}
-            )
-
-        page_nums = list(valid_pages.keys())
-
-        tokenized_texts = []
-        for page_num in page_nums:
-            tokenized_texts.append(extract_pure_tokens(valid_pages[page_num]))
-
-        vectorizer = TfidfVectorizer(
-            ngram_range=(1, 2),        
-            max_df=0.7,                
-            min_df=1,
-            token_pattern=r'[가-힣a-zA-Z]{2,}' 
+        message = analyze_page_contents_to_concepts(
+            db=db,
+            lecture=lecture,
+            lecture_id=lecture_id,
+            page_contents=page_contents,
         )
-        
-        tfidf_matrix = vectorizer.fit_transform(tokenized_texts)
-        feature_names = vectorizer.get_feature_names_out()
-
-        used_concepts = set()
-
-        for i, page_num in enumerate(page_nums):
-            scores = tfidf_matrix[i].toarray()[0]
-            
-            top_indices = scores.argsort()[::-1][:10]
-            keywords = [feature_names[idx] for idx in top_indices if scores[idx] > 0]
-
-            if not keywords:
-                continue
-
-            concept_name = keywords[0]
-            for kw in keywords:
-                if kw not in used_concepts:
-                    concept_name = kw
-                    break
-            used_concepts.add(concept_name)
-            
-            original_text = remove_headers(valid_pages[page_num])
-            sentences = extract_key_sentences(original_text, keywords, top_k=2)
-
-            new_concept = models.Concept(
-                lecture_id=lecture_id,
-                concept_name=concept_name,
-                page_num=page_num,
-                keywords=",".join(keywords[:5]), 
-                sentences=json.dumps(sentences, ensure_ascii=False) 
-            )
-            db.add(new_concept)
-
-        lecture.analyze_status = "completed"
-        db.commit()
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,
-            content={"message": "개념 추출 알고리즘 연산이 완수되었습니다."}
+            content={"message": message}
         )
 
     except Exception as e:
-        db.rollback()
-        lecture.analyze_status = "failed"
-        db.commit()
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": f"알고리즘 내부 연산 중 서버 예외 발생: {str(e)}"}
@@ -307,7 +227,7 @@ def get_lecture_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture = db.query(models.Lecture).filter(models.Lecture.id == lecture_id).first()
+    lecture = lecture_repository.get_lecture_by_id(db, lecture_id)
     if not lecture:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -327,16 +247,14 @@ def get_lecture_concepts(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture = db.query(models.Lecture).filter(models.Lecture.id == lecture_id).first()
+    lecture = lecture_repository.get_lecture_by_id(db, lecture_id)
     if not lecture:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={"error": "해당 강의를 찾을 수 없습니다."}
         )
 
-    concepts = db.query(models.Concept).filter(
-        models.Concept.lecture_id == lecture_id
-    ).order_by(models.Concept.page_num, models.Concept.id).all()
+    concepts = concept_repository.get_concepts_by_lecture(db, lecture_id)
 
     result_list = []
     for c in concepts:
