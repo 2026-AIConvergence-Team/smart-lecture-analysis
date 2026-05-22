@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 from pydantic import BaseModel, Field
 
@@ -9,15 +9,16 @@ class QuizGenerateRequest(BaseModel):
     page_end: int = Field(..., ge=1)
     concept_ids: Optional[List[int]] = None
 
-    # MIXED | BLANK | DEFINITION | KEYWORD_CHOICE | OX
+    # Supported values: MIXED, BLANK, DEFINITION, KEYWORD_CHOICE, OX
     quiz_type: str = "MIXED"
-
     count_per_concept: int = Field(default=1, ge=1)
     option_count: int = Field(default=4, ge=2, le=6)
 
     use_ai: bool = True
+    # Falls back to the server default provider when omitted.
+    ai_provider: Optional[Literal["gemini", "groq"]] = None
 
-    # EASY | MEDIUM | HARD
+    # Supported values: EASY, MEDIUM, HARD
     difficulty: str = "MEDIUM"
 
 
@@ -36,7 +37,7 @@ class QuizGenerateResponse(BaseModel):
 
     ai_requested: bool = False
     ai_enhanced_count: int = 0
-    generation_mode: str = "algorithm"  # algorithm | hybrid
+    generation_mode: str = "algorithm"  # Supported values: algorithm, hybrid
 
     message: str
 
@@ -48,7 +49,7 @@ class QuizItemResponse(BaseModel):
     concept_id: Optional[int] = None
     concept: Optional[str] = None
 
-    # 생성 작업 단위 조회를 위한 필드
+    # Identifies the generation job that produced this quiz.
     generation_job_id: Optional[int] = None
 
     page: int
@@ -84,7 +85,7 @@ class QuizGenerateStatusResponse(BaseModel):
 
     message: Optional[str] = None
 
-    # True면 Quiz.generation_job_id 기준으로 정확히 최신 작업 결과만 조회 중이라는 의미
+    # Indicates whether results are scoped by Quiz.generation_job_id.
     uses_generation_job_id: bool = False
 
     quizzes: List[QuizItemResponse]
@@ -107,7 +108,7 @@ class QuizUpdateRequest(BaseModel):
 class ManualQuizCreateRequest(BaseModel):
     concept_id: Optional[int] = None
 
-    # BLANK | DEFINITION | KEYWORD_CHOICE | OX
+    # Supported values: BLANK, DEFINITION, KEYWORD_CHOICE, OX
     quiz_type: str
 
     question: str
@@ -132,5 +133,7 @@ class QuizRegenerateRequest(BaseModel):
     use_ai: bool = True
     difficulty: str = "MEDIUM"
 
-    # 예: "문제가 너무 쉬움", "보기 품질이 낮음", "더 응용형으로"
+    # Falls back to the server default provider when omitted.
+    ai_provider: Optional[Literal["gemini", "groq"]] = None
+    # Optional reviewer note used to guide regeneration.
     reason: Optional[str] = None

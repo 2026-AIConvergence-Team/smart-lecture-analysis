@@ -13,7 +13,14 @@ from app.constants.quiz_constants import (
     AI_TARGET_MAX_QUIZZES,
     AI_TARGET_MIN_QUIZZES,
     ALGORITHM_QUIZ_TYPES,
+    ALLOWED_SHORT_CONCEPT_LABELS,
+    BAD_EXAMPLE_CONCEPT_MARKERS,
+    BAD_STANDALONE_ENGLISH_KEYWORDS,
+    COMPLETE_PREDICATE_MARKERS,
     CONCEPT_LABEL_REPLACEMENTS,
+    CORE_KEYWORD_REQUIRED_MARKERS,
+    DANGLING_TEXT_ENDINGS,
+    EXTRA_WEAK_BLANK_ANSWER_WORDS,
     GENERIC_BAD_CONCEPT_LABELS,
     LOW_QUALITY_TEXT_MARKERS,
     MAX_CONCEPT_LABEL_LENGTH,
@@ -28,28 +35,75 @@ from app.constants.quiz_constants import (
     SERVICE_MAX_QUIZ_COUNT,
     SERVICE_MIN_QUIZ_COUNT,
     SHORT_ANSWER_SENTENCE_LIKE_MARKERS,
+    SHORT_OPTION_FRAGMENT_MARKERS,
+    SLIDE_ARTIFACT_CHARS,
     SOURCE_FACT_MARKERS,
     SOURCE_LABEL_SEPARATORS,
+    TITLE_LIKE_SHORT_OPTION_MARKERS,
     UNSAFE_CONCEPT_LABEL_SUFFIXES,
     WEAK_BLANK_ANSWER_WORDS,
+    MIN_DEFINITION_ANSWER_COMPACT_LENGTH,
 )
 
 
 def is_generic_bad_concept_label(value: str) -> bool:
     compact = normalize_for_match(value)
-    return compact in {
+
+    if compact in {
         normalize_for_match(label)
         for label in GENERIC_BAD_CONCEPT_LABELS
-    }
+    }:
+        return True
+
+    return is_bad_example_or_noise_label(value)
 
 
 def infer_concept_label_from_source_sentence(source_sentence: str) -> Optional[str]:
     """
-    원문 근거 문장을 보고 퀴즈용 개념명을 보정합니다.
-    PDF 원문에서 추출된 concept_name이 너무 일반적이거나 예시 단어인 경우를 보완합니다.
+    원문 근거에서 퀴즈에 적합한 대표 개념명을 추론합니다.
+    추출된 concept_name이 너무 넓거나 예시성 단어일 때 보정합니다.
     """
     compact = normalize_for_match(source_sentence)
 
+    # Chapter 7 '학습하는 뇌' 자료에서 자주 누락되는 핵심 개념 보정
+    if "안와전두피질" in compact:
+        return "안와전두피질"
+
+    if "보상예측오류" in compact or ("보상" in compact and "예측오류" in compact):
+        return "보상예측오류"
+
+    if "도파민" in compact:
+        return "도파민"
+
+    if "심적시뮬레이션" in compact:
+        return "심적 시뮬레이션"
+
+    if "장기적증강" in compact or "ltp" in compact:
+        return "장기적 증강"
+
+    if "시냅스가소성" in compact or (
+        "시냅스" in compact
+        and ("가중" in compact or "연결강도" in compact or "변" in compact)
+    ):
+        return "시냅스 가소성"
+
+    if "시냅스" in compact and ("100조" in compact or "조개" in compact or "존재" in compact):
+        return "시냅스"
+
+    if "강화학습" in compact:
+        return "강화학습 이론"
+
+    if "안도" in compact:
+        return "안도"
+
+    if "습관" in compact and ("행동" in compact or "무의식" in compact):
+        return "습관적 행동"
+
+    # 예시 선택지만 담긴 실험 설명은 개념명으로 승격하지 않습니다.
+    if "가위" in compact and "바위" in compact and "보" in compact:
+        return None
+
+    # 다른 강의 자료에서 반복된 추출 오류 보정
     if "화초" in compact and "곤충" in compact:
         return "공생적 분업"
 
@@ -92,25 +146,24 @@ def calculate_target_quiz_count(
     available_concept_count: int,
 ) -> int:
     """
-    페이지 범위와 가용 개념 수를 기준으로 최종 퀴즈 수를 계산합니다.
+    페이지 범위와 가용 개념 수를 기준으로 생성할 퀴즈 수를 정합니다.
 
-    기존 방식은 4페이지당 1문제라서 9페이지 PDF도 3문제만 생성되는 문제가 있었습니다.
-    수업 중 이해도 체크 용도라면 선택한 페이지 범위의 핵심 개념을 최대한 고르게 묻는 편이 낫습니다.
+    수업 중 이해도 확인 용도에서는 선택 범위의 핵심 개념을
+    가능한 한 고르게 묻는 것이 우선입니다.
     """
     if available_concept_count <= 0:
         return 0
 
     page_count = max(1, page_end - page_start + 1)
 
-    # 기본적으로 페이지당 1문제를 목표로 하되,
-    # 실제 추출된 개념 수와 서비스 최대 개수를 넘지 않습니다.
+    # 페이지당 1문제를 기본 목표로 삼고, 가용 개념 수와 서비스 한도를 함께 적용합니다.
     target_count = min(
         SERVICE_MAX_QUIZ_COUNT,
         available_concept_count,
         page_count,
     )
 
-    # 단, 개념이 충분하면 최소 문제 수를 보장합니다.
+    # 충분한 개념이 있으면 서비스 최소 생성 수를 보장합니다.
     if available_concept_count >= SERVICE_MIN_QUIZ_COUNT:
         target_count = max(SERVICE_MIN_QUIZ_COUNT, target_count)
 
@@ -165,8 +218,21 @@ def deserialize_options(raw_options: str) -> List[str]:
     return []
 
 
+def strip_slide_artifacts(value: str) -> str:
+    cleaned = str(value or "")
+
+    for char in SLIDE_ARTIFACT_CHARS:
+        cleaned = cleaned.replace(char, " ")
+
+    # PPT/PDF 추출 중 bullet 문자가 텍스트 앞에 붙은 경우를 정리합니다.
+    cleaned = re.sub(r"^[\s\-–—·•‣▪▶→➔]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+
+    return cleaned.strip()
+
+
 def normalize_text_item(value: str) -> str:
-    return " ".join(str(value).strip().split())
+    return " ".join(strip_slide_artifacts(str(value)).strip().split())
 
 
 def compact_text(value: str) -> str:
@@ -210,12 +276,27 @@ def is_good_short_answer(value: str) -> bool:
     if not has_enough_meaning(cleaned):
         return False
 
+    if has_bad_slide_symbol(cleaned):
+        return False
+
+    if is_bad_example_or_noise_label(cleaned):
+        return False
+
+    if is_title_like_short_option(cleaned):
+        return False
+
     if len(cleaned) > MAX_SHORT_ANSWER_LENGTH:
         return False
 
     if contains_low_quality_marker(cleaned):
         return False
 
+    if is_generic_bad_concept_label(cleaned):
+        return False
+
+    if is_cut_or_dangling_text(cleaned):
+        return False
+    
     if len(compact_text(cleaned)) > 14 and any(
         marker in compact_text(cleaned)
         for marker in SHORT_ANSWER_SENTENCE_LIKE_MARKERS
@@ -226,10 +307,6 @@ def is_good_short_answer(value: str) -> bool:
 
 
 def is_weak_blank_answer(value: str) -> bool:
-    """
-    BLANK 문제에서 빈칸으로 만들기 약한 답을 걸러냅니다.
-    예: 합리적으로, 독립적으로 같은 부사/수식어는 이해도 체크 효과가 낮습니다.
-    """
     cleaned = normalize_text_item(value)
     compact = compact_text(cleaned)
 
@@ -238,18 +315,34 @@ def is_weak_blank_answer(value: str) -> bool:
 
     normalized_weak_words = {
         compact_text(word)
-        for word in WEAK_BLANK_ANSWER_WORDS
+        for word in [*WEAK_BLANK_ANSWER_WORDS, *EXTRA_WEAK_BLANK_ANSWER_WORDS]
     }
 
     if compact in normalized_weak_words:
         return True
 
-    # 짧은 부사형 표현은 핵심 개념어보다 문장 암기에 가깝습니다.
     if len(compact) <= 8 and compact.endswith(("적으로", "하게", "히")):
         return True
 
-    # 한 글자 답은 너무 쉬운 경우가 많아 BLANK에서는 제외합니다.
     if len(compact) <= 1:
+        return True
+
+    weak_verb_endings = (
+        "나누",
+        "확인",
+        "수행",
+        "사용",
+        "제시",
+        "증가",
+        "감소",
+        "변화",
+        "선택",
+        "계산",
+        "전달",
+        "수정",
+    )
+
+    if compact.endswith(weak_verb_endings):
         return True
 
     return False
@@ -262,16 +355,28 @@ def is_good_blank_answer(value: str) -> bool:
 def is_good_option_candidate(value: str) -> bool:
     cleaned = normalize_text_item(value)
 
+    if has_bad_slide_symbol(value):
+        return False
+
     if not has_enough_meaning(cleaned):
         return False
 
     if len(cleaned) > MAX_OPTION_LENGTH:
         return False
 
+    if contains_low_quality_marker(cleaned):
+        return False
+
+    if is_cut_or_dangling_text(cleaned):
+        return False
+    
     return True
 
 
 def is_good_source_sentence(value: str) -> bool:
+    if has_bad_slide_symbol(value):
+        return False
+
     cleaned = normalize_text_item(value)
     compact = compact_text(cleaned)
 
@@ -287,10 +392,16 @@ def is_good_source_sentence(value: str) -> bool:
     if contains_low_quality_marker(cleaned):
         return False
 
+    if is_cut_or_dangling_text(cleaned):
+        return False
+    
     if is_question_like_text(cleaned):
         return False
 
     if not has_fact_marker(cleaned):
+        return False
+
+    if is_weak_source_fragment(cleaned):
         return False
 
     return True
@@ -319,6 +430,433 @@ def normalize_for_match(value: str) -> str:
         str(value or "").lower(),
     )
 
+def is_bad_example_or_noise_label(value: str) -> bool:
+    cleaned = normalize_text_item(value)
+    normalized = normalize_for_match(cleaned)
+
+    if not normalized:
+        return True
+
+    if any(marker in normalized for marker in BAD_EXAMPLE_CONCEPT_MARKERS):
+        return True
+
+    if normalized in BAD_STANDALONE_ENGLISH_KEYWORDS:
+        return True
+
+    return False
+
+
+def looks_like_core_quiz_keyword(value: str) -> bool:
+    cleaned = normalize_text_item(value)
+    normalized = normalize_for_match(cleaned)
+
+    if not normalized:
+        return False
+
+    if is_bad_example_or_noise_label(cleaned):
+        return False
+
+    if is_title_like_short_option(cleaned):
+        return False
+
+    # 한글/영문 혼합 핵심어는 허용하되, 단독 영단어 노이즈는 제외합니다.
+    if re.fullmatch(r"[A-Za-z]+", cleaned) and normalized not in {"ltp", "td"}:
+        return normalized in {"dopamine"}
+
+    if len(normalized) <= 2 and cleaned not in ALLOWED_SHORT_CONCEPT_LABELS:
+        return False
+
+    return any(marker in normalized for marker in CORE_KEYWORD_REQUIRED_MARKERS)
+
+
+def has_bad_slide_symbol(value: str) -> bool:
+    return any(char in str(value or "") for char in SLIDE_ARTIFACT_CHARS)
+
+
+def has_complete_predicate(value: str) -> bool:
+    compact = compact_text(value)
+    return any(marker in compact for marker in COMPLETE_PREDICATE_MARKERS)
+
+
+def is_cut_or_dangling_text(value: str) -> bool:
+    """
+    PDF 추출 과정에서 중간에 끊긴 문장과 원문 조각을 걸러냅니다.
+    예: '... 의사결정과정에 영향을', '만약 ... 이것이'
+    """
+    cleaned = normalize_text_item(value)
+    compact = compact_text(cleaned)
+
+    if not compact:
+        return True
+
+    # 조사나 어미가 앞뒤에 붙은 짧은 원문 조각은 제외합니다.
+    # 예: 을수행, 의원숭이실험
+    if len(compact) <= 10:
+        if compact.startswith(("을", "를", "의", "에", "와", "과")):
+            return True
+
+        if compact.endswith((
+            "수행",
+            "실험",
+            "부분",
+            "부위",
+            "경우",
+            "과정",
+            "방법",
+            "결과",
+            "상태",
+            "때",
+            "하",
+        )):
+            return True
+
+        # 짧은 한글 후보라도 동작명이나 조각형 표현이면 제외합니다.
+        if any(marker in compact for marker in ("나누", "설정", "시행", "선택")):
+            return True
+
+        return False
+
+    # 긴 문장이 '...라고 하', '...아니라고 하'처럼 종결 전에 끊긴 경우
+    if compact.endswith((
+        "라고하",
+        "다고하",
+        "한다고하",
+        "아니라고하",
+        "것이라고하",
+    )):
+        return True
+
+    if compact.endswith(DANGLING_TEXT_ENDINGS):
+        return True
+
+    dangling_phrases = (
+        "영향을",
+        "이것이",
+        "것을",
+        "것이",
+        "하기위해",
+        "하기위한",
+        "할수있는",
+        "나누고",
+        "설정하고",
+    )
+    if compact.endswith(dangling_phrases):
+        return True
+
+    if cleaned.count("(") != cleaned.count(")"):
+        return True
+
+    if cleaned.count("[") != cleaned.count("]"):
+        return True
+
+    # 긴 텍스트에 서술 종결이나 사실 표지가 없으면 제목/조각일 가능성이 큽니다.
+    if len(compact) >= 22 and not has_complete_predicate(cleaned):
+        return True
+
+    return False
+
+
+def is_definition_answer_quality(answer: str, source_sentence: str) -> bool:
+    """
+    DEFINITION 보기/정답이 완전한 근거 문장인지 검증합니다.
+    긴 설명형 답변은 source_sentence와 사실상 같은 근거를 공유해야 합니다.
+    """
+    cleaned_answer = normalize_text_item(answer)
+    cleaned_source = normalize_text_item(source_sentence)
+
+    if not cleaned_answer or not cleaned_source:
+        return False
+
+    if is_cut_or_dangling_text(cleaned_answer):
+        return False
+
+    if is_cut_or_dangling_text(cleaned_source):
+        return False
+
+    if len(compact_text(cleaned_answer)) < MIN_DEFINITION_ANSWER_COMPACT_LENGTH:
+        return False
+
+    normalized_answer = normalize_for_match(cleaned_answer)
+    normalized_source = normalize_for_match(cleaned_source)
+
+    if normalized_answer == normalized_source:
+        return True
+
+    # 긴 설명형 보기가 원문 근거와 다르면 근거 불일치로 간주합니다.
+    if len(compact_text(cleaned_answer)) > MAX_SHORT_ANSWER_LENGTH:
+        return normalized_answer in normalized_source or normalized_source in normalized_answer
+
+    return is_answer_grounded_in_source(cleaned_answer, cleaned_source)
+
+def is_title_like_short_option(value: str) -> bool:
+    """
+    짧은 보기처럼 보이지만 실제로는 슬라이드 제목/소제목인 후보를 제거합니다.
+    예: 절차학습은뇌의어디 기저핵, 후회와안와전두피질 블레즈파스칼,
+        신경세포와학습 시냅스가중치
+    """
+    cleaned = normalize_text_item(value)
+    compact = compact_text(cleaned)
+    normalized = normalize_for_match(cleaned)
+
+    if not normalized:
+        return True
+
+    if any(marker in normalized for marker in TITLE_LIKE_SHORT_OPTION_MARKERS):
+        return True
+
+    # 의문사가 포함된 후보는 개념어보다 슬라이드 질문 제목일 가능성이 높습니다.
+    if any(marker in normalized for marker in ("어디", "무엇", "어떻게", "왜")):
+        return True
+
+    # 'A와 B C' 형태의 제목형 조각을 걸러냅니다.
+    title_pair_markers = (
+        "와학습",
+        "과학습",
+        "와기억",
+        "과기억",
+        "와피질",
+        "과피질",
+        "와안와전두피질",
+        "과안와전두피질",
+    )
+    if any(marker in normalized for marker in title_pair_markers):
+        return True
+
+    # 여러 개념/제목 단위가 억지로 이어붙은 짧은 후보를 제외합니다.
+    if len(compact) >= 14 and " " in cleaned:
+        left, right = cleaned.split(" ", 1)
+        if (
+            len(normalize_for_match(left)) >= 5
+            and len(normalize_for_match(right)) >= 3
+            and any(marker in normalize_for_match(left) for marker in ("은", "는", "와", "과"))
+        ):
+            return True
+
+    return False
+
+
+def is_fragment_like_short_option(value: str) -> bool:
+    """
+    BLANK/KEYWORD_CHOICE 보기로 부적합한 짧은 원문 조각을 제거합니다.
+    예: 을수행, 의원숭이실험, 예상치못하게과일주스를받을때
+    """
+    cleaned = normalize_text_item(value)
+    compact = compact_text(cleaned)
+    normalized = normalize_for_match(cleaned)
+
+    if not compact:
+        return True
+
+    if is_generic_bad_concept_label(cleaned):
+        return True
+
+    if is_bad_example_or_noise_label(cleaned):
+        return True
+
+    if is_title_like_short_option(cleaned):
+        return True
+
+    if any(marker in normalized for marker in SHORT_OPTION_FRAGMENT_MARKERS):
+        return True
+
+    if compact.startswith(("을", "를", "의", "에", "와", "과")):
+        return True
+
+    if compact.endswith((
+        "수행",
+        "실험",
+        "시행",
+        "선택",
+        "설정",
+        "확인",
+        "증가",
+        "감소",
+        "변화",
+        "때",
+        "경우",
+        "과정",
+        "방법",
+        "결과",
+        "상태",
+        "가중치",
+    )):
+        return True
+
+    # 공백 없이 과도하게 긴 문장형 조각은 핵심어 보기로 보지 않습니다.
+    if len(compact) >= 18 and " " not in cleaned and not re.search(r"[A-Za-z]", cleaned):
+        return True
+
+    return False
+
+
+def is_good_short_option_candidate(value: str) -> bool:
+    """
+    BLANK/KEYWORD_CHOICE 보기 후보를 검증합니다.
+    핵심어 또는 짧은 명사구만 허용합니다.
+    """
+    cleaned = normalize_text_item(value)
+
+    if not is_good_short_answer(cleaned):
+        return False
+
+    if is_fragment_like_short_option(cleaned):
+        return False
+
+    if not looks_like_core_quiz_keyword(cleaned):
+        return False
+
+    return True
+
+
+def is_good_definition_option_candidate(value: str) -> bool:
+    """
+    DEFINITION 보기 후보를 검증합니다.
+    완전한 설명 문장 또는 '개념: 설명' 형태만 허용합니다.
+    """
+    cleaned = normalize_text_item(value)
+
+    if not is_good_option_candidate(cleaned):
+        return False
+
+    if is_bad_example_or_noise_label(cleaned):
+        return False
+
+    if not is_good_source_sentence(cleaned):
+        return False
+
+    if not is_definition_answer_quality(cleaned, cleaned):
+        return False
+
+    return True
+
+
+def is_bad_blank_question_shape(question: str) -> bool:
+    """
+    BLANK 문제가 원문 조각 맞추기로 변질되는 경우를 차단합니다.
+    예: ___고T자미로실험수행, 부위에...것을___
+    """
+    cleaned = normalize_text_item(question)
+    compact = compact_text(cleaned)
+
+    if not compact:
+        return True
+
+    if compact.startswith("___") or compact.endswith("___"):
+        return True
+
+    if "___:" in compact or ":___" in compact:
+        return True
+
+    # 빈칸 앞뒤 문맥이 너무 짧으면 개념 이해보다 문장 기억 문제가 됩니다.
+    left, _, right = cleaned.partition("___")
+    if len(compact_text(left)) < 4 or len(compact_text(right)) < 4:
+        return True
+
+    return False
+
+
+def is_weak_source_fragment(value: str) -> bool:
+    """
+    source_sentence가 제목, 조각, 비교 항목만 담은 경우를 차단합니다.
+    """
+    cleaned = normalize_text_item(value)
+    compact = compact_text(cleaned)
+    normalized = normalize_for_match(cleaned)
+
+    if len(compact) < 14:
+        return True
+
+    if is_cut_or_dangling_text(cleaned):
+        return True
+    
+    if "vs" in normalized and not any(
+        marker in normalized
+        for marker in ("설명", "비교", "제공", "유리", "불리", "선택", "가능", "적합")
+    ):
+        return True
+
+    weak_endings = (
+        "통해가",
+        "시냅스가중",
+        "이후의일",
+        "것을",
+        "관한",
+        "통해",
+        "위해",
+        "나누",
+    )
+    if compact.endswith(weak_endings):
+        return True
+
+    return False
+
+
+def is_valid_ox_statement(statement: str) -> bool:
+    """
+    OX 문항으로 사용할 수 있는 참/거짓 명제인지 확인합니다.
+    제목, 비교 항목, 단순 키워드 나열은 제외합니다.
+    """
+    cleaned = normalize_text_item(statement)
+    compact = compact_text(cleaned)
+    normalized = normalize_for_match(cleaned)
+
+    if is_weak_source_fragment(cleaned):
+        return False
+
+    if "vs" in normalized:
+        return False
+
+    predicate_markers = (
+        "이다",
+        "한다",
+        "된다",
+        "있다",
+        "없다",
+        "의미",
+        "제공",
+        "가능",
+        "수행",
+        "증가",
+        "감소",
+        "변화",
+        "영향",
+        "연관",
+        "사용",
+        "필요",
+        "담당",
+        "형성",
+        "보유",
+        "설명",
+        "선택",
+        "수정",
+    )
+
+    return any(marker in compact for marker in predicate_markers)
+
+
+def is_answer_exactly_required_in_source(answer: str) -> bool:
+    """
+    숫자/수량 정답은 source_sentence에 정확히 포함되어야 합니다.
+    예: 100조개 문제인데 source_sentence에 100조개가 없으면 근거 불일치입니다.
+    """
+    return bool(re.search(r"\d", str(answer or "")))
+
+
+def is_answer_grounded_in_source(answer: str, source_sentence: str) -> bool:
+    normalized_answer = normalize_for_match(answer)
+    normalized_source = normalize_for_match(source_sentence)
+
+    if not normalized_answer or not normalized_source:
+        return False
+
+    if normalized_answer in normalized_source:
+        return True
+
+    if is_answer_exactly_required_in_source(answer):
+        return False
+
+    return True
+
 
 def contains_low_quality_marker(value: str) -> bool:
     normalized = normalize_for_match(value)
@@ -341,13 +879,25 @@ def is_safe_concept_label(value: str) -> bool:
     if is_generic_bad_concept_label(cleaned):
         return False
 
+    if is_bad_example_or_noise_label(cleaned):
+        return False
+
+    if has_bad_slide_symbol(value):
+        return False
+
+    if len(compact) <= 2 and cleaned not in ALLOWED_SHORT_CONCEPT_LABELS:
+        return False
+
+    if is_cut_or_dangling_text(cleaned):
+        return False
+    
     if len(compact) > MAX_CONCEPT_LABEL_LENGTH:
         return False
 
     if compact.endswith(UNSAFE_CONCEPT_LABEL_SUFFIXES):
         return False
 
-    # 조사/서술어가 붙은 문장 조각은 개념명으로 쓰지 않습니다.
+    # 조사/서술어가 붙은 문장 조각은 개념명으로 사용하지 않습니다.
     if len(compact) >= 7 and any(
         fragment in compact
         for fragment in SENTENCE_LIKE_CONCEPT_FRAGMENTS
@@ -398,7 +948,7 @@ def select_best_source_sentence(
             if normalized_term in normalized_sentence:
                 score += 3
 
-            # 긴 키워드는 일부만 겹쳐도 같은 개념 문장일 가능성이 있습니다.
+            # 긴 키워드는 일부만 겹쳐도 같은 개념을 설명하는 문장일 수 있습니다.
             if len(normalized_term) >= 8 and normalized_term[:6] in normalized_sentence:
                 score += 1
 
@@ -435,24 +985,60 @@ def has_unsafe_negative_question(question: str) -> bool:
 
 def get_concept_label(concept: models.Concept) -> str:
     """
-    퀴즈에 노출 가능한 대표 개념명을 concept_name과 keywords에서 선택합니다.
+    퀴즈에 노출할 대표 개념명을 source_sentence와 keyword 기반으로 보정합니다.
     """
-    candidates = [
-        normalize_text_item(concept.concept_name),
-        *parse_keywords(concept.keywords),
+    source_sentences = [
+        normalize_text_item(sentence)
+        for sentence in parse_sentences(concept.sentences)
+        if normalize_text_item(sentence)
     ]
 
-    for candidate in candidates:
-        cleaned = normalize_text_item(candidate)
+    # 1) 근거 문장에서 명확히 추론되는 강의 핵심 개념을 우선합니다.
+    for source_sentence in source_sentences:
+        inferred_label = infer_concept_label_from_source_sentence(source_sentence)
+        if inferred_label and is_safe_concept_label(inferred_label):
+            return inferred_label
 
-        if is_safe_concept_label(cleaned):
-            return cleaned
+    # 2) '개념명: 설명' 형태에서는 구분자 앞부분을 label 후보로 사용합니다.
+    for source_sentence in source_sentences:
+        source_label = split_source_label(source_sentence)
+        if source_label and is_safe_concept_label(source_label):
+            return source_label
+
+    normalized_sources = " ".join(
+        normalize_for_match(sentence)
+        for sentence in source_sentences
+    )
+
+    # 3) 원본 concept_name은 안전하고 근거 문장에도 등장할 때만 사용합니다.
+    concept_name = simplify_concept_label(concept.concept_name)
+    normalized_concept_name = normalize_for_match(concept_name)
+
+    if (
+        concept_name
+        and is_safe_concept_label(concept_name)
+        and len(normalized_concept_name) >= 3
+        and normalized_concept_name in normalized_sources
+    ):
+        return concept_name
+
+    # 4) keyword 중 근거 문장에 실제 등장하는 안전한 핵심어를 사용합니다.
+    safe_keywords = get_safe_keywords_for_ai(concept)
+    for keyword in safe_keywords:
+        normalized_keyword = normalize_for_match(keyword)
+        if len(normalized_keyword) >= 3 and normalized_keyword in normalized_sources:
+            return keyword
+
+    # 5) 마지막으로 안전한 keyword 하나를 fallback으로 사용합니다.
+    if safe_keywords:
+        return safe_keywords[0]
 
     return ""
 
+
 def find_answer_keyword(sentence: str, keywords: List[str]) -> Optional[str]:
     """
-    빈칸 처리 후에도 문맥이 남는 정답 키워드를 선택합니다.
+    빈칸 처리 후에도 충분한 문맥이 남는 정답 키워드를 선택합니다.
     """
     candidates = []
 
@@ -469,12 +1055,15 @@ def find_answer_keyword(sentence: str, keywords: List[str]) -> Optional[str]:
         if not is_meaningful_blank_question(question):
             continue
 
+        if is_bad_blank_question_shape(question):
+            continue
+
         candidates.append(cleaned_keyword)
 
     if not candidates:
         return None
 
-    # 의미가 부족한 한 글자 후보보다 구체적인 핵심어를 우선합니다.
+    # 짧고 모호한 후보보다 구체적인 핵심어를 우선합니다.
     candidates = sorted(
         candidates,
         key=lambda item: (len(compact_text(item)), len(item)),
@@ -485,15 +1074,19 @@ def find_answer_keyword(sentence: str, keywords: List[str]) -> Optional[str]:
 
 
 def build_keyword_pool(concepts: List[models.Concept]) -> List[str]:
+    """
+    BLANK 보기 후보에는 원본 keyword 전체가 아니라 검증된 핵심 개념어만 사용합니다.
+    일반 영단어, 실험 예시, 문장 조각이 보기로 섞이는 것을 막습니다.
+    """
     pool = []
 
     for concept in concepts:
         concept_label = get_concept_label(concept)
-        if is_good_short_answer(concept_label):
+        if is_good_short_option_candidate(concept_label):
             pool.append(concept_label)
 
-        for keyword in parse_keywords(concept.keywords):
-            if is_good_short_answer(keyword):
+        for keyword in get_safe_keywords_for_ai(concept):
+            if is_good_short_option_candidate(keyword):
                 pool.append(keyword)
 
     return unique_keep_order(pool)
@@ -514,7 +1107,7 @@ def build_concept_name_pool(concepts: List[models.Concept]) -> List[str]:
     return unique_keep_order([
         get_concept_label(concept)
         for concept in concepts
-        if is_good_short_answer(get_concept_label(concept))
+        if is_good_short_option_candidate(get_concept_label(concept))
     ])
 
 
@@ -534,16 +1127,33 @@ def is_similar_text(a: str, b: str) -> bool:
     return False
 
 
-def rank_wrong_candidates(answer: str, candidates: List[str]) -> List[str]:
+def is_valid_option_for_mode(value: str, option_mode: str) -> bool:
+    normalized_mode = normalize_text_item(option_mode).upper()
+
+    if normalized_mode == "SHORT":
+        return is_good_short_option_candidate(value)
+
+    if normalized_mode == "DEFINITION":
+        return is_good_definition_option_candidate(value)
+
+    return is_good_option_candidate(value)
+
+
+def rank_wrong_candidates(
+    answer: str,
+    candidates: List[str],
+    option_mode: str = "GENERIC",
+) -> List[str]:
     cleaned_answer = normalize_text_item(answer)
     answer_len = len(compact_text(cleaned_answer))
+    normalized_mode = normalize_text_item(option_mode).upper()
 
     filtered = []
 
     for candidate in candidates:
         cleaned_candidate = normalize_text_item(candidate)
 
-        if not is_good_option_candidate(cleaned_candidate):
+        if not is_valid_option_for_mode(cleaned_candidate, normalized_mode):
             continue
 
         if is_similar_text(cleaned_answer, cleaned_candidate):
@@ -552,12 +1162,27 @@ def rank_wrong_candidates(answer: str, candidates: List[str]) -> List[str]:
         candidate_len = len(compact_text(cleaned_candidate))
         length_gap = abs(answer_len - candidate_len)
 
-        # 길이 차이가 큰 보기는 제외하지 않고 후순위로 보냅니다.
-        filtered.append((length_gap, random.random(), cleaned_candidate))
+        # SHORT는 길이가 비슷한 개념어, DEFINITION은 설명성이 있는 문장을 우선합니다.
+        if normalized_mode == "SHORT":
+            mode_score = 0
+            if candidate_len <= MAX_SHORT_ANSWER_LENGTH:
+                mode_score -= 2
+            if " " in cleaned_candidate or re.search(r"[A-Za-z]", cleaned_candidate):
+                mode_score -= 1
+        elif normalized_mode == "DEFINITION":
+            mode_score = 0
+            if split_source_label(cleaned_candidate):
+                mode_score -= 2
+            if has_complete_predicate(cleaned_candidate):
+                mode_score -= 1
+        else:
+            mode_score = 0
 
-    filtered.sort(key=lambda item: (item[0], item[1]))
+        filtered.append((mode_score, length_gap, random.random(), cleaned_candidate))
 
-    return unique_keep_order([item[2] for item in filtered])
+    filtered.sort(key=lambda item: (item[0], item[1], item[2]))
+
+    return unique_keep_order([item[3] for item in filtered])
 
 
 def build_options(
@@ -565,13 +1190,19 @@ def build_options(
     candidates: List[str],
     option_count: int,
     seed: Optional[int] = None,
+    option_mode: str = "GENERIC",
 ) -> Optional[List[str]]:
     cleaned_answer = normalize_text_item(answer)
+    normalized_mode = normalize_text_item(option_mode).upper()
 
-    if not is_good_option_candidate(cleaned_answer):
+    if not is_valid_option_for_mode(cleaned_answer, normalized_mode):
         return None
 
-    wrong_candidates = rank_wrong_candidates(cleaned_answer, candidates)
+    wrong_candidates = rank_wrong_candidates(
+        answer=cleaned_answer,
+        candidates=candidates,
+        option_mode=normalized_mode,
+    )
 
     needed_wrong_count = option_count - 1
     if len(wrong_candidates) < needed_wrong_count:
@@ -644,6 +1275,7 @@ def generate_blank_quiz(
             candidates=all_keywords,
             option_count=option_count,
             seed=index_seed + offset,
+            option_mode="SHORT",
         )
         if not options:
             continue
@@ -684,6 +1316,9 @@ def generate_definition_quiz(
     if not answer:
         return None
 
+    if not is_definition_answer_quality(answer, answer):
+        return None
+    
     question = f"다음 중 '{concept_label}' 개념을 가장 잘 설명하는 것은 무엇인가요?"
 
     options = build_options(
@@ -691,6 +1326,7 @@ def generate_definition_quiz(
         candidates=all_sentences,
         option_count=option_count,
         seed=index_seed,
+        option_mode="DEFINITION",
     )
 
     if not options:
@@ -730,7 +1366,7 @@ def generate_keyword_choice_quiz(
     if not source_sentence:
         return None
 
-    # 설명에 정답이 그대로 노출된 문제는 제외합니다.
+    # 설명에 정답이 그대로 노출된 문항은 제외합니다.
     if normalize_for_match(answer) in normalize_for_match(source_sentence):
         return None
 
@@ -741,6 +1377,7 @@ def generate_keyword_choice_quiz(
         candidates=all_concept_names,
         option_count=option_count,
         seed=index_seed,
+        option_mode="SHORT",
     )
 
     if not options:
@@ -780,6 +1417,17 @@ def generate_ox_quiz(
         return None
 
     if is_question_like_text(source_sentence):
+        return None
+
+    # '개념: 설명' 형태는 DEFINITION에 더 적합하므로 OX에서는 제외합니다.
+    if ":" in source_sentence or "：" in source_sentence:
+        return None
+
+    # 너무 짧은 문장은 OX로 만들면 단순 암기 확인에 그치기 쉽습니다.
+    if len(compact_text(source_sentence)) < 22:
+        return None
+
+    if not is_valid_ox_statement(source_sentence):
         return None
 
     return {
@@ -847,13 +1495,52 @@ def generate_single_quiz(
     return None
 
 
+def sanitize_quiz_payload(quiz_data: Dict) -> Dict:
+    """
+    PDF/PPT bullet 기호를 제거하고 문자열 필드를 일관되게 정규화합니다.
+    """
+    cleaned = dict(quiz_data)
+
+    for key in ("quiz_type", "question", "answer", "explanation", "source_sentence", "concept_name"):
+        if key in cleaned and cleaned.get(key) is not None:
+            cleaned[key] = normalize_text_item(str(cleaned.get(key)))
+
+    raw_options = cleaned.get("options") or []
+    if isinstance(raw_options, list):
+        cleaned["options"] = unique_keep_order([
+            normalize_text_item(str(option))
+            for option in raw_options
+            if normalize_text_item(str(option))
+        ])
+
+    return cleaned
+
+
+def get_quiz_duplicate_signature(quiz: Dict) -> Tuple:
+    """
+    concept_id, quiz_type, answer, source 조합으로 중복 문항을 판별합니다.
+    AI 생성 결과와 fallback 결과가 섞일 때 같은 문제가 반복 저장되는 것을 막습니다.
+    """
+    return (
+        quiz.get("concept_id"),
+        normalize_text_item(str(quiz.get("quiz_type") or "")).upper(),
+        normalize_for_match(str(quiz.get("answer") or "")),
+        normalize_for_match(str(quiz.get("source_sentence") or "")),
+    )
+
+
 def attach_concept_metadata(quiz_data: Dict, concept: models.Concept) -> Dict:
     concept_label = get_concept_label(concept)
 
+    quiz_data = sanitize_quiz_payload(quiz_data)
     quiz_data["lecture_id"] = concept.lecture_id
     quiz_data["concept_id"] = concept.id
     quiz_data["concept_name"] = concept_label or concept.concept_name
-    quiz_data["concept_keywords"] = parse_keywords(concept.keywords)
+    quiz_data["concept_keywords"] = [
+        keyword
+        for keyword in get_safe_keywords_for_ai(concept)
+        if is_good_short_option_candidate(keyword)
+    ]
     quiz_data["page_num"] = concept.page_num
     return quiz_data
 
@@ -862,10 +1549,13 @@ def is_low_quality_generated_quiz(
     quiz: Dict,
     option_count: int,
 ) -> bool:
+    quiz = sanitize_quiz_payload(quiz)
+
     quiz_type = str(quiz.get("quiz_type") or "").strip().upper()
     question = normalize_text_item(str(quiz.get("question") or ""))
     answer = normalize_text_item(str(quiz.get("answer") or ""))
     source_sentence = normalize_text_item(str(quiz.get("source_sentence") or ""))
+    concept_name = normalize_text_item(str(quiz.get("concept_name") or ""))
 
     raw_options = quiz.get("options") or []
     if not isinstance(raw_options, list):
@@ -880,6 +1570,12 @@ def is_low_quality_generated_quiz(
     if quiz_type not in ALGORITHM_QUIZ_TYPES:
         return True
 
+    if concept_name and not is_safe_concept_label(concept_name):
+        return True
+
+    if concept_name and is_bad_example_or_noise_label(concept_name):
+        return True
+
     if not question or not answer:
         return True
 
@@ -892,6 +1588,17 @@ def is_low_quality_generated_quiz(
     if not is_good_source_sentence(source_sentence):
         return True
 
+    if any(is_cut_or_dangling_text(option) for option in options):
+        return True
+
+    if quiz_type in {"BLANK", "KEYWORD_CHOICE"}:
+        if any(not is_good_short_option_candidate(option) for option in options):
+            return True
+
+    if quiz_type == "DEFINITION":
+        if any(not is_good_definition_option_candidate(option) for option in options):
+            return True
+        
     if answer not in options:
         return True
 
@@ -924,7 +1631,11 @@ def is_low_quality_generated_quiz(
         if is_question_like_text(statement):
             return True
 
+        if not is_valid_ox_statement(statement):
+            return True
+
         return False
+
 
     if len(options) != option_count:
         return True
@@ -936,6 +1647,9 @@ def is_low_quality_generated_quiz(
         if not is_meaningful_blank_question(question):
             return True
 
+        if is_bad_blank_question_shape(question):
+            return True
+
         if not is_good_blank_answer(answer):
             return True
 
@@ -943,7 +1657,7 @@ def is_low_quality_generated_quiz(
             return True
 
     if quiz_type == "KEYWORD_CHOICE":
-        # KEYWORD_CHOICE의 정답은 긴 설명문이 아니라 핵심어/짧은 명사구여야 합니다.
+        # KEYWORD_CHOICE 정답은 긴 설명문이 아니라 핵심어/짧은 명사구여야 합니다.
         if not is_good_short_answer(answer):
             return True
 
@@ -952,6 +1666,12 @@ def is_low_quality_generated_quiz(
 
     if quiz_type == "DEFINITION":
         if len(answer) > MAX_OPTION_LENGTH:
+            return True
+
+        if not is_definition_answer_quality(answer, source_sentence):
+            return True
+
+        if not is_answer_grounded_in_source(answer, source_sentence):
             return True
 
     if quiz_type != "BLANK":
@@ -971,13 +1691,22 @@ def filter_quality_quizzes(
 ) -> Tuple[List[Dict], int]:
     passed = []
     rejected_count = 0
+    seen_signatures = set()
 
     for quiz in quizzes:
-        if is_low_quality_generated_quiz(quiz, option_count=option_count):
+        cleaned_quiz = sanitize_quiz_payload(quiz)
+
+        if is_low_quality_generated_quiz(cleaned_quiz, option_count=option_count):
             rejected_count += 1
             continue
 
-        passed.append(quiz)
+        signature = get_quiz_duplicate_signature(cleaned_quiz)
+        if signature in seen_signatures:
+            rejected_count += 1
+            continue
+
+        seen_signatures.add(signature)
+        passed.append(cleaned_quiz)
 
     return passed, rejected_count
 
@@ -991,6 +1720,7 @@ def generate_quizzes_for_concepts(
 ) -> Tuple[List[Dict], int]:
     generated = []
     failed_count = 0
+    seen_signatures = set()
 
     all_keywords = build_keyword_pool(all_lecture_concepts)
     all_sentences = build_sentence_pool(all_lecture_concepts)
@@ -1005,7 +1735,7 @@ def generate_quizzes_for_concepts(
             base_seed = concept_index + local_index
             quiz_data = None
 
-            # MIXED는 후보 유형을 한 번씩 순회하며 성공한 첫 문제를 사용합니다.
+            # MIXED는 후보 유형을 순회하며 처음 성공한 문항을 사용합니다.
             for attempt in range(len(generation_types)):
                 selected_quiz_type = generation_types[
                     (concept_index + local_index + attempt) % len(generation_types)
@@ -1028,6 +1758,11 @@ def generate_quizzes_for_concepts(
                     if is_low_quality_generated_quiz(candidate, option_count=option_count):
                         continue
 
+                    signature = get_quiz_duplicate_signature(candidate)
+                    if signature in seen_signatures:
+                        continue
+
+                    seen_signatures.add(signature)
                     quiz_data = candidate
                     break
 
@@ -1063,7 +1798,7 @@ def pick_evenly_spaced_items(
 
     selected = [items[index] for index in selected_indexes]
 
-    # 반올림 중복으로 부족한 수량은 앞쪽 후보부터 보충합니다.
+    # 반올림 중복으로 수량이 부족하면 앞쪽 후보부터 보충합니다.
     if len(selected) < max_count:
         selected_ids = {id(item) for item in selected}
         for item in items:
@@ -1142,7 +1877,11 @@ def get_safe_keywords_for_ai(concept: models.Concept) -> List[str]:
     for keyword in parse_keywords(concept.keywords):
         cleaned = simplify_concept_label(keyword)
 
-        if cleaned and is_safe_concept_label(cleaned):
+        if (
+            cleaned
+            and is_safe_concept_label(cleaned)
+            and looks_like_core_quiz_keyword(cleaned)
+        ):
             keywords.append(cleaned)
 
     return unique_keep_order(keywords)
