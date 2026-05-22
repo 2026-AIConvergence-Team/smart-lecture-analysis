@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 import urllib.error
@@ -9,12 +10,20 @@ from app.core.config import settings
 from app.services.quiz.quiz_generation import (
     compact_text,
     deserialize_options,
+    is_answer_grounded_in_source,
+    is_bad_blank_question_shape,
     is_good_blank_answer,
     is_good_short_answer,
+    is_valid_ox_statement,
     normalize_text_item,
     parse_keywords,
     parse_sentences,
     unique_keep_order,
+    get_refined_concept_label_for_ai,
+    get_safe_keywords_for_ai,
+    is_cut_or_dangling_text,
+    is_definition_answer_quality,
+    select_source_sentences_for_ai,
 )
 from app.services.quiz.quiz_validation import (
     SUPPORTED_GENERATED_QUIZ_TYPES,
@@ -30,13 +39,20 @@ class AIQuotaExceededError(AIQuizGenerationError):
     pass
 
 
-def can_use_ai(request_use_ai: bool) -> bool:
+def can_use_ai(request_use_ai: bool, provider: Optional[str] = None) -> bool:
+    if not request_use_ai or not getattr(settings, "AI_QUIZ_ENABLED", False):
+        return False
+
+    try:
+        provider_config = get_ai_provider_config(provider)
+    except AIQuizGenerationError as exc:
+        print(f"[AI_QUIZ_PROVIDER_ERROR] {exc}")
+        return False
+
     return bool(
-        request_use_ai
-        and getattr(settings, "AI_QUIZ_ENABLED", False)
-        and getattr(settings, "AI_QUIZ_API_KEY", None)
-        and getattr(settings, "AI_QUIZ_MODEL", None)
-        and getattr(settings, "AI_QUIZ_BASE_URL", None)
+        provider_config.get("api_key")
+        and provider_config.get("model")
+        and provider_config.get("base_url")
     )
 
 
@@ -57,6 +73,48 @@ def is_ai_quota_exceeded_error(exc: Exception) -> bool:
 def normalize_ai_text(value: Optional[str]) -> str:
     return " ".join(str(value or "").strip().split())
 
+def normalize_ai_provider(provider: Optional[str] = None) -> str:
+    selected_provider = normalize_ai_text(
+        provider or getattr(settings, "AI_QUIZ_PROVIDER", "gemini")
+    ).lower()
+
+    if selected_provider in {"gemini", "google"}:
+        return "gemini"
+
+    if selected_provider in {"groq", "gpt-oss", "gpt_oss"}:
+        return "groq"
+
+    raise AIQuizGenerationError(
+        "지원하지 않는 AI 제공자입니다. ai_provider는 gemini 또는 groq만 사용할 수 있습니다."
+    )
+
+
+def get_ai_provider_config(provider: Optional[str] = None) -> Dict[str, Optional[str]]:
+    normalized_provider = normalize_ai_provider(provider)
+
+    if normalized_provider == "groq":
+        return {
+            "provider": "groq",
+            "api_key": getattr(settings, "GROQ_API_KEY", None),
+            "base_url": getattr(settings, "GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
+            "model": getattr(settings, "GROQ_MODEL", "openai/gpt-oss-20b"),
+        }
+
+    return {
+        "provider": "gemini",
+        "api_key": (
+            getattr(settings, "GEMINI_API_KEY", None)
+            or getattr(settings, "AI_QUIZ_API_KEY", None)
+        ),
+        "base_url": (
+            getattr(settings, "GEMINI_BASE_URL", None)
+            or getattr(settings, "AI_QUIZ_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+        ),
+        "model": (
+            getattr(settings, "GEMINI_MODEL", None)
+            or getattr(settings, "AI_QUIZ_MODEL", "gemini-2.5-flash-lite")
+        ),
+    }
 
 MIN_STRONG_SOURCE_SENTENCE_COMPACT_LENGTH = 18
 
@@ -99,57 +157,182 @@ def select_stronger_source_sentence(
     return sources[0]
 
 
-def extract_json_object(text: str) -> Dict:
-    """
-    Markdown 코드블록이나 부가 설명이 섞인 AI 응답에서 JSON 객체만 복원합니다.
-    """
+def preview_ai_text(text: str, limit: int = 500) -> str:
+    cleaned = " ".join(str(text or "").replace("\r", " ").replace("\n", " ").split())
+    if len(cleaned) > limit:
+        return cleaned[:limit] + "..."
+    return cleaned
+
+
+def strip_markdown_code_fence(text: str) -> str:
     cleaned = str(text or "").strip()
 
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?", "", cleaned).strip()
-        cleaned = re.sub(r"```$", "", cleaned).strip()
+    if not cleaned.startswith("```"):
+        return cleaned
 
-    try:
-        data = json.loads(cleaned)
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        pass
-
-    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-    if not match:
-        raise AIQuizGenerationError("AI 응답에서 JSON 객체를 찾지 못했습니다.")
-
-    data = json.loads(match.group(0))
-    if not isinstance(data, dict):
-        raise AIQuizGenerationError("AI 응답 JSON이 객체 형식이 아닙니다.")
-
-    return data
+    cleaned = re.sub(r"^```(?:json|JSON)?", "", cleaned).strip()
+    cleaned = re.sub(r"```$", "", cleaned).strip()
+    return cleaned
 
 
-def call_chat_completion(messages: List[Dict[str, str]]) -> str:
-    base_url = str(getattr(settings, "AI_QUIZ_BASE_URL", "")).rstrip("/")
+def find_balanced_json_object(text: str) -> Optional[str]:
+    """
+    응답 앞뒤에 설명/추론이 섞여도 첫 번째 완성된 JSON 객체만 잘라냅니다.
+    단순 정규식 {.*}은 문자열 안의 중괄호나 뒤쪽 설명까지 먹어서 JSONDecodeError가 나기 쉽습니다.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+
+    for index in range(start, len(text)):
+        char = text[index]
+
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+
+    return None
+
+
+def normalize_json_candidate(candidate: str) -> str:
+    """
+    LLM이 자주 만드는 가벼운 JSON 실수를 일부 보정합니다.
+    - trailing comma 제거
+    - 제어문자 제거
+    """
+    cleaned = str(candidate or "").strip()
+    cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", cleaned)
+    return cleaned
+
+
+def extract_json_object(text: str) -> Dict:
+    """
+    Markdown 코드블록, 부가 설명, reasoning 텍스트가 섞인 AI 응답에서 JSON 객체만 복원합니다.
+
+    Groq gpt-oss-20b는 가끔 JSON 대신 Python dict 스타일 문자열을 반환하거나,
+    앞쪽에 reasoning 문장을 붙이는 경우가 있어 json.loads와 ast.literal_eval을 순서대로 시도합니다.
+    단, 응답이 max_tokens에 잘려서 닫는 따옴표/중괄호가 없는 경우는 안전하게 fallback합니다.
+    """
+    cleaned = strip_markdown_code_fence(text)
+
+    candidates = []
+
+    balanced = find_balanced_json_object(cleaned)
+    if balanced:
+        candidates.append(balanced)
+
+    if cleaned not in candidates:
+        candidates.append(cleaned)
+
+    last_error = None
+
+    for candidate in candidates:
+        normalized = normalize_json_candidate(candidate)
+        if not normalized:
+            continue
+
+        try:
+            data = json.loads(normalized)
+            if isinstance(data, dict):
+                return data
+        except Exception as exc:
+            last_error = exc
+
+        try:
+            data = ast.literal_eval(normalized)
+            if isinstance(data, dict):
+                return data
+        except Exception as exc:
+            last_error = exc
+
+    preview = preview_ai_text(cleaned)
+    if "{" not in cleaned:
+        raise AIQuizGenerationError(f"AI 응답에서 JSON 객체를 찾지 못했습니다. preview={preview}")
+
+    if cleaned.lstrip().startswith("{") and find_balanced_json_object(cleaned) is None:
+        raise AIQuizGenerationError(
+            f"AI 응답 JSON이 중간에 잘렸습니다. AI_QUIZ_MAX_TOKENS를 늘리거나 출력 필드를 줄여야 합니다. preview={preview}"
+        )
+
+    raise AIQuizGenerationError(f"AI 응답 JSON 파싱 실패: {last_error}. preview={preview}")
+
+
+
+def call_chat_completion(
+    messages: List[Dict[str, str]],
+    provider: Optional[str] = None,
+) -> str:
+    provider_config = get_ai_provider_config(provider)
+
+    base_url = str(provider_config.get("base_url") or "").rstrip("/")
     if not base_url:
-        raise AIQuizGenerationError("AI_QUIZ_BASE_URL이 설정되어 있지 않습니다.")
+        raise AIQuizGenerationError("AI provider base_url이 설정되어 있지 않습니다.")
+
+    api_key = provider_config.get("api_key")
+    if not api_key:
+        raise AIQuizGenerationError(
+            f"{provider_config.get('provider')} API key가 설정되어 있지 않습니다."
+        )
 
     url = f"{base_url}/chat/completions"
+    model_name = str(provider_config.get("model") or "")
 
     payload = {
-        "model": settings.AI_QUIZ_MODEL,
+        "model": provider_config["model"],
         "messages": messages,
-        "temperature": 0.25,
+        "temperature": 0.0,
     }
+
+    # Gemini는 JSON mode가 안정적입니다.
+    # Groq gpt-oss-20b는 batch JSON mode에서 json_validate_failed가 자주 발생해서
+    # 프롬프트 + 후처리 파서 방식으로 처리합니다.
+    if "gpt-oss" in model_name:
+        # GPT-OSS는 reasoning 모델이므로 reasoning 토큰을 낮추고, reasoning 본문은 응답에서 제외합니다.
+        payload["include_reasoning"] = False
+        payload["reasoning_effort"] = "low"
+    else:
+        payload["response_format"] = {"type": "json_object"}
 
     max_tokens = getattr(settings, "AI_QUIZ_MAX_TOKENS", None)
     if max_tokens:
-        payload["max_tokens"] = max_tokens
+        # 800 이하에서는 한국어 JSON이 source/explanation 중간에서 잘리는 사례가 많아
+        # gpt-oss 단건 개선 호출만 최소 1200으로 올립니다.
+        if "gpt-oss" in model_name:
+            payload["max_tokens"] = max(int(max_tokens), 1200)
+        else:
+            payload["max_tokens"] = max_tokens
 
     request = urllib.request.Request(
         url=url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {settings.AI_QUIZ_API_KEY}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
         },
         method="POST",
     )
@@ -167,9 +350,24 @@ def call_chat_completion(messages: List[Dict[str, str]]) -> str:
         raise AIQuizGenerationError(f"AI API 호출 실패: {str(exc)}") from exc
 
     try:
-        return response_data["choices"][0]["message"]["content"]
+        message = response_data["choices"][0]["message"]
+        content = message.get("content") or ""
+
+        # 일부 reasoning 계열 모델은 reasoning 필드에 답을 섞어 반환하는 경우가 있어 보조적으로 확인합니다.
+        if not normalize_ai_text(content):
+            content = message.get("reasoning") or message.get("reasoning_content") or ""
+
+        if not normalize_ai_text(content):
+            raise AIQuizGenerationError(
+                f"AI API 응답 content가 비어 있습니다. message_keys={list(message.keys())}"
+            )
+
+        return content
+    except AIQuizGenerationError:
+        raise
     except Exception as exc:
         raise AIQuizGenerationError("AI API 응답 형식이 예상과 다릅니다.") from exc
+
 
 
 def get_difficulty_instruction(difficulty: str) -> str:
@@ -214,24 +412,25 @@ def build_source_payload(
     option_count: int,
     reason: Optional[str] = None,
 ) -> Dict:
-    keywords = unique_keep_order([
-        normalize_ai_text(keyword)
-        for keyword in parse_keywords(concept.keywords)
-        if normalize_ai_text(keyword)
-    ])
+    # Groq 단건 개선도 원본 concept_name이 아니라 정제된 concept_label을 기준으로 보냅니다.
+    sentences = select_source_sentences_for_ai(concept)
+    concept_label = get_refined_concept_label_for_ai(
+        concept=concept,
+        source_sentences=sentences,
+    )
 
-    sentences = unique_keep_order([
-        normalize_ai_text(sentence)
-        for sentence in parse_sentences(concept.sentences)
-        if normalize_ai_text(sentence)
-    ])
+    if not concept_label:
+        concept_label = select_representative_concept_name(concept)
+
+    keywords = get_safe_keywords_for_ai(concept)
 
     return {
-        "concept_name": select_representative_concept_name(concept),
+        "concept_name": concept_label,
+        "concept_label": concept_label,
         "original_concept_name": normalize_ai_text(concept.concept_name),
         "page_num": concept.page_num,
-        "keywords": keywords[:12],
-        "source_sentences": sentences[:8],
+        "keywords": keywords[:6],
+        "source_sentences": sentences[:4],
         "draft_quiz": {
             "quiz_type": draft_quiz.get("quiz_type"),
             "question": draft_quiz.get("question"),
@@ -270,7 +469,11 @@ def build_ai_messages(
         "original_concept_name": source_payload.get("original_concept_name"),
         "page_num": source_payload.get("page_num"),
         "keywords": source_payload.get("keywords") or [],
-        "source_sentences": source_payload.get("source_sentences") or [],
+        # Groq gpt-oss-20b의 TPM과 출력 안정성을 위해 단건 개선에는 핵심 근거만 짧게 전달합니다.
+        "source_sentences": [
+            str(sentence)[:220]
+            for sentence in (source_payload.get("source_sentences") or [])[:3]
+        ],
         "draft_quiz": {
             "quiz_type": draft.get("quiz_type"),
             "question": draft.get("question"),
@@ -289,9 +492,8 @@ def build_ai_messages(
         "options": ["보기1", "보기2", "보기3", "보기4"],
         "answer": "보기 중 정답과 완전히 같은 문자열",
         "explanation": "해설",
-        "source_sentence": "근거 문장",
+        "source_sentence": "source_sentences 중 정답의 직접 근거 문장 1개",
     }
-
     difficulty_instruction = (
         source_payload.get("difficulty_instruction")
         or get_difficulty_instruction(difficulty)
@@ -301,7 +503,8 @@ def build_ai_messages(
         "너는 대학 강의 PDF 기반 한국어 객관식 퀴즈 생성기다. "
         "제공된 JSON의 concept_name, keywords, source_sentences 정보만 사용한다. "
         "외부 지식, 추측, 원문에 없는 사실은 금지한다. "
-        "반드시 JSON 객체 하나만 반환한다."
+        "반드시 JSON 객체 하나만 반환한다. JSON 앞뒤에 설명, 생각 과정, Markdown을 절대 붙이지 않는다. "
+        "출력의 첫 글자는 반드시 { 이고 마지막 글자는 반드시 } 이다."
     )
 
     user_message = (
@@ -313,12 +516,19 @@ def build_ai_messages(
         f"- OX는 options가 정확히 [\"O\", \"X\"], 그 외 유형은 options가 정확히 {option_count}개다.\n"
         "- answer는 반드시 options 중 하나와 완전히 같은 문자열이어야 한다.\n"
         "- question에 answer를 그대로 노출하지 마라. 단, BLANK는 정답 위치를 ___로 가린다.\n"
-        "- source_sentence는 source_sentences 중 하나를 그대로 사용하라. 불가능하면 draft_quiz.source_sentence를 사용하라.\n"
-        "- 정답은 가능하면 핵심어 또는 짧은 설명으로 만들고, 긴 원문 문장 전체를 정답으로 쓰지 마라.\n"
+        "- source_sentence는 source_sentences 중 정답의 직접 근거가 되는 문장 1개를 그대로 사용하라.\n"
+        "- source_sentences 안에 정답의 근거가 없으면 draft_quiz.source_sentence를 사용하지 말고, source_sentences 안에서 만들 수 있는 다른 문제로 바꿔라.\n"
+        "- KEYWORD_CHOICE 정답은 핵심어/짧은 명사구만 허용한다. 긴 문장 전체를 정답으로 쓰지 마라.\n"
+        "- DEFINITION 보기는 완전한 설명 문장이어야 하며, 중간에서 끊긴 원문 조각을 쓰지 마라.\n"
+        "- '가위', '바위', '보', '초기', '확인', '방울', '경우', '과정', '방법', '결과', '상태' 같은 일반 단어/예시 단어를 정답으로 쓰지 마라.\n"
         "- 오답은 같은 주제 범위 안에서 그럴듯하지만 명확히 틀리게 만들어라.\n"
         "- question은 concept_name과 직접 관련된 내용을 물어야 한다.\n"
         "- explanation은 왜 정답인지 1~2문장으로 짧게 작성하라.\n"
-        "- Markdown 코드블록 없이 JSON만 반환하라.\n\n"
+        "- Markdown 코드블록 없이 JSON만 반환하라. 첫 글자는 {, 마지막 글자는 } 이어야 한다.\n"
+        "- JSON 문자열 값 안에서는 큰따옴표를 쓰지 말고 작은따옴표를 사용하라.\n\n"
+        "- 숫자/수량이 정답이면 source_sentence에도 같은 숫자/수량이 반드시 들어 있어야 한다.\n"
+        "- OX 문제는 참/거짓 판단 가능한 완전한 명제로만 만들고, 제목이나 'A vs B' 형태만으로 만들지 마라.\n"
+        "- BLANK는 문장 맨 앞/맨 끝을 빈칸으로 만들지 말고, 핵심 개념어만 ___로 가려라.\n"
         f"출력 형식: {json.dumps(output_schema, ensure_ascii=False, separators=(',', ':'))}\n\n"
         f"입력: {json.dumps(compact_payload, ensure_ascii=False, separators=(',', ':'))}"
     )
@@ -467,11 +677,31 @@ def clean_ai_quiz_payload(
         allowed_sources=source_sentences,
     )
 
+    if quiz_type == "OX":
+        statement = question.split("\n\n")[-1].strip()
+        if not is_valid_ox_statement(statement):
+            raise AIQuizGenerationError("OX 문제가 참/거짓 판단 가능한 명제가 아닙니다.")
+
+    if quiz_type == "BLANK" and is_bad_blank_question_shape(question):
+        raise AIQuizGenerationError("BLANK 문제가 원문 조각 맞추기 형태입니다.")
+
+    if is_cut_or_dangling_text(source_sentence):
+        raise AIQuizGenerationError("source_sentence가 중간에서 잘린 원문 조각입니다.")
+
+    if quiz_type == "DEFINITION" and not is_definition_answer_quality(answer, source_sentence):
+        raise AIQuizGenerationError("DEFINITION 정답이 완전한 설명 문장이 아니거나 source_sentence와 맞지 않습니다.")
+    
+    if quiz_type != "OX" and not is_answer_grounded_in_source(answer, source_sentence):
+        raise AIQuizGenerationError("정답과 source_sentence의 근거가 일치하지 않습니다.")
+    
     if quiz_type == "KEYWORD_CHOICE" and not is_good_short_answer(answer):
         raise AIQuizGenerationError("KEYWORD_CHOICE 정답이 핵심어/짧은 명사구가 아닙니다.")
 
     if quiz_type == "BLANK" and not is_good_blank_answer(answer):
         raise AIQuizGenerationError("BLANK 정답이 핵심 개념어로 적절하지 않습니다.")
+    
+    if any(is_cut_or_dangling_text(option) for option in options):
+        raise AIQuizGenerationError("options에 중간에서 잘린 원문 조각이 포함되어 있습니다.")
     
     cleaned_quiz = {
         **fallback_quiz,
@@ -504,11 +734,12 @@ def enhance_quiz_with_ai(
     use_ai: bool,
     reason: Optional[str] = None,
     stop_on_quota_error: bool = False,
+    provider: Optional[str] = None,
 ) -> Tuple[Dict, bool]:
     """
     AI 보강에 실패하면 기존 draft를 반환해 퀴즈 생성 흐름을 유지합니다.
     """
-    if not can_use_ai(use_ai):
+    if not can_use_ai(use_ai, provider=provider):
         return draft_quiz, False
 
     try:
@@ -526,7 +757,7 @@ def enhance_quiz_with_ai(
             reason=reason,
         )
 
-        content = call_chat_completion(messages)
+        content = call_chat_completion(messages, provider=provider)
         data = extract_json_object(content)
 
         return clean_ai_quiz_payload(
@@ -666,7 +897,9 @@ def build_batch_ai_messages(
         f"- OX는 options가 정확히 [\"O\", \"X\"], 그 외 유형은 options가 정확히 {option_count}개다.\n"
         "- answer는 반드시 options 중 하나와 완전히 같은 문자열이어야 한다.\n"
         "- KEYWORD_CHOICE의 answer는 긴 문장/설명문이 아니라 핵심어 또는 짧은 명사구여야 한다.\n"
+        "- DEFINITION의 answer/options는 완전한 설명 문장이어야 하며, 중간에서 끊긴 원문 조각은 금지한다.\n"
         "- BLANK의 answer는 핵심 개념어 또는 명사구여야 하며, '합리적으로', '독립적으로', '무의식적으로' 같은 단순 부사/수식어는 금지한다.\n"
+        "- '가위', '바위', '보', '초기', '확인', '방울', '경우', '과정', '방법', '결과', '상태' 같은 일반 단어/예시 단어를 정답으로 쓰지 마라.\n"
         "- question에 answer를 그대로 노출하지 마라. 단, BLANK는 정답 위치를 ___로 가린다.\n"
         "- 부정형 문제, 예: '옳지 않은 것은?', '관련 없는 것은?'은 만들지 마라.\n"
         "- question은 concept_label과 직접 관련된 내용을 물어야 한다.\n"
@@ -803,6 +1036,17 @@ def clean_batch_ai_quiz(
         requested_source_sentence=source_sentence,
         allowed_sources=allowed_sources,
     )
+
+    if quiz_type == "OX":
+        statement = question.split("\n\n")[-1].strip()
+        if not is_valid_ox_statement(statement):
+            raise AIQuizGenerationError("OX 문제가 참/거짓 판단 가능한 명제가 아닙니다.")
+
+    if quiz_type == "BLANK" and is_bad_blank_question_shape(question):
+        raise AIQuizGenerationError("BLANK 문제가 원문 조각 맞추기 형태입니다.")
+
+    if quiz_type != "OX" and not is_answer_grounded_in_source(answer, source_sentence):
+        raise AIQuizGenerationError("정답과 source_sentence의 근거가 일치하지 않습니다.")
     
     options = normalize_ai_quiz_options(raw_quiz.get("options"))
 
@@ -833,6 +1077,9 @@ def clean_batch_ai_quiz(
     if quiz_type == "BLANK" and not is_good_blank_answer(answer):
         return None
 
+    if any(is_cut_or_dangling_text(option) for option in options):
+        return None
+    
     if not explanation:
         explanation = f"원문 근거: {source_sentence}"
 
@@ -948,6 +1195,7 @@ def generate_quizzes_with_ai_batch_once(
     difficulty: str,
     option_count: int,
     batch_size: int,
+    provider: Optional[str] = None,
 ) -> List[Dict]:
     generated_quizzes = []
 
@@ -964,7 +1212,7 @@ def generate_quizzes_with_ai_batch_once(
                 option_count=option_count,
             )
 
-            content = call_chat_completion(messages)
+            content = call_chat_completion(messages, provider=provider)
             payload = extract_json_payload(content)
 
             batch_quizzes = parse_batch_ai_quizzes(
@@ -1006,6 +1254,7 @@ def generate_quizzes_with_ai_batch(
     target_min: int = 8,
     target_max: int = 12,
     retry_missing_once: bool = True,
+    provider: Optional[str] = None,
 ) -> Tuple[List[Dict], int]:
     """
     material을 AI batch로 생성하고, 부족한 항목은 누락분만 한 번 재시도합니다.
@@ -1013,7 +1262,7 @@ def generate_quizzes_with_ai_batch(
     if not materials:
         return [], 0
 
-    if not can_use_ai(use_ai):
+    if not can_use_ai(use_ai, provider=provider):
         return [], 0
 
     selected_materials = materials[:target_max]
@@ -1032,6 +1281,7 @@ def generate_quizzes_with_ai_batch(
         difficulty=difficulty,
         option_count=option_count,
         batch_size=batch_size,
+        provider=provider
     )
 
     # AI 응답 중복은 concept_id 기준으로 제거합니다.
@@ -1071,6 +1321,7 @@ def generate_quizzes_with_ai_batch(
                 difficulty=difficulty,
                 option_count=option_count,
                 batch_size=batch_size,
+                provider=provider,
             )
 
             generated_concept_ids = get_generated_concept_ids(generated_quizzes)
