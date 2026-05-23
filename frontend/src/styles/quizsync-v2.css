@@ -478,6 +478,20 @@ body[data-role="student"] .profile-card .av { background:var(--brand); }
   background:#3f3f46; color:#e4e4e7; font-size:12px; font-weight:600;
 }
 .pdf-toolbar .grp-btn:hover { background:#52525b; }
+.pdf-toolbar .grp-btn:disabled { opacity:.7; pointer-events:none; }
+.pdf-toolbar .sync-label { padding:7px 12px; }
+.pdf-toolbar .icon-only { width:30px; height:30px; padding:0; justify-content:center; }
+.pdf-toolbar .pdf-zoom-group { gap:7px; }
+.pdf-toolbar .pdf-zoom-group .mono { min-width:38px; text-align:center; color:#e4e4e7; }
+.pdf-toolbar-live { position:relative; }
+.pdf-page-center {
+  position:absolute; left:50%; transform:translateX(-50%);
+  color:#c4c4cb; font-size:13px;
+}
+.pdf-file-name {
+  position:absolute; left:50%; transform:translateX(-50%);
+  color:#a1a1aa; max-width:44%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
 .pdf-toolbar .grp-btn.danger { background:var(--danger); color:#fff; }
 .pdf-stage {
   aspect-ratio:16/9;
@@ -485,13 +499,46 @@ body[data-role="student"] .profile-card .av { background:var(--brand); }
   display:grid; place-items:center;
   position:relative; overflow:hidden;
 }
+.pdf-stage.zoomed {
+  overflow:auto;
+  place-items:start center;
+  padding:18px;
+}
+.pdf-stage.zoomed canvas {
+  max-width:none;
+  max-height:none;
+}
+.pdf-empty {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:8px; color:#73737d; text-align:center;
+}
+.pdf-empty strong { margin-top:6px; font-size:14px; color:#e4e4e7; }
+.pdf-empty span { font-size:12px; color:#a1a1aa; }
+.pdf-frame.pdf-fullscreen {
+  position:fixed;
+  inset:14px;
+  z-index:120;
+  border-radius:14px;
+  box-shadow:0 24px 80px rgba(0,0,0,.45);
+}
+.pdf-frame.pdf-fullscreen .pdf-stage {
+  min-height:0;
+}
+.pdf-frame.pdf-fullscreen::before {
+  content:'';
+  position:fixed;
+  inset:0;
+  z-index:-1;
+  background:rgba(0,0,0,.72);
+  backdrop-filter:blur(4px);
+}
 .pdf-stage .page {
   width:100%; height:100%; object-fit:contain;
   background:#fff;
   display:grid; place-items:center;
 }
 .pdf-lock-overlay {
-  position:absolute; inset:0; z-index:2;
+  position:absolute; inset:42px 0 0; z-index:2;
   background:rgba(15,23,42,.78); backdrop-filter:blur(6px);
   display:grid; place-items:center; color:#fff; text-align:center;
 }
@@ -857,6 +904,38 @@ body.class-mode .content { padding:14px 20px; max-width:none; }
   max-width:100%; max-height:100%; object-fit:contain;
   display:block; background:#fff;
 }
+.pdf-frame-review {
+  height:100%;
+  min-height:0;
+  background:var(--zinc-100);
+  border-radius:0;
+  border:0;
+}
+.pdf-stage-review {
+  flex:1;
+  min-height:0;
+  aspect-ratio:auto;
+  background:var(--zinc-100);
+  padding:12px 14px;
+}
+.pdf-stage-review canvas {
+  width:100% !important;
+  height:auto !important;
+  max-height:100%;
+  border-radius:6px;
+  box-shadow:0 2px 8px rgba(15,23,42,.12);
+}
+.pdf-empty-review strong { color:var(--zinc-700); }
+.pdf-empty-review span { color:var(--zinc-500); }
+.pdf-review-nav {
+  height:56px;
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:8px 14px;
+  border-top:1px solid var(--zinc-200);
+  background:#fff;
+  flex-shrink:0;
+}
+.pdf-review-nav .mono { color:var(--zinc-500); font-size:12px; }
 
 /* Student PDF lock overlay (purple tone) */
 .lock-card {
