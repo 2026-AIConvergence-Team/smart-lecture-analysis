@@ -12,12 +12,6 @@ class LectureCreate(BaseModel):
     time: time
 
 
-class CourseLectureCreate(BaseModel):
-    title: str = Field(..., min_length=1)
-    date: date
-    time: time
-
-
 # 2. 강의 생성 및 조회용 공통 Response
 class LectureResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -31,6 +25,26 @@ class LectureResponse(BaseModel):
     class_code: Optional[str] = None
     status: str
     created_at: datetime
+
+
+class LectureCodeResponse(BaseModel):
+    lecture_id: int
+    class_code: str
+
+
+class LectureJoinRequest(BaseModel):
+    class_code: str = Field(..., min_length=1)
+
+
+class LectureJoinResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    participant_id: int
+    lecture_id: int
+    user_id: int
+    joined_at: datetime
+    class_code: str
+    already_joined: bool = False
 
 
 class LectureStatusUpdateRequest(BaseModel):
