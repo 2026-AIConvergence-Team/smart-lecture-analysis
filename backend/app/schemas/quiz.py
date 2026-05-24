@@ -25,7 +25,7 @@ class QuizGenerateRequest(BaseModel):
 class QuizGenerateResponse(BaseModel):
     lecture_id: int
     job_id: int
-    set_id: int
+    set_id: Optional[int] = None
     status: str
 
     page_start: int
@@ -73,7 +73,7 @@ class QuizItemResponse(BaseModel):
 class QuizGenerateStatusResponse(BaseModel):
     lecture_id: int
     job_id: int
-    set_id: int
+    set_id: Optional[int] = None
 
     status: str
     progress: int
@@ -88,8 +88,8 @@ class QuizGenerateStatusResponse(BaseModel):
 
     message: Optional[str] = None
 
-    # Indicates whether results are scoped by Quiz.generation_job_id.
-    uses_generation_job_id: bool = False
+    # Indicates whether results are scoped by Quiz.set_id.
+    uses_set_id: bool = False
 
     quizzes: List[QuizItemResponse]
 
@@ -109,6 +109,7 @@ class QuizUpdateRequest(BaseModel):
 
 
 class ManualQuizCreateRequest(BaseModel):
+    set_id: Optional[int] = None
     concept_id: Optional[int] = None
 
     # Supported values: BLANK, DEFINITION, KEYWORD_CHOICE, OX
@@ -127,6 +128,34 @@ class ManualQuizCreateRequest(BaseModel):
 
 class QuizStatusUpdateRequest(BaseModel):
     status: str
+
+
+class QuizSetStatusUpdateRequest(BaseModel):
+    status: str
+
+
+class QuizSetResponse(BaseModel):
+    set_id: int
+    lecture_id: int
+    generation_job_id: Optional[int] = None
+    set_number: int
+    page_start: int
+    page_end: int
+    status: str
+    quiz_count: int = 0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class QuizSetWithQuizzesResponse(QuizSetResponse):
+    quizzes: List[QuizItemResponse]
+
+
+class LectureQuizSetsWithQuizzesResponse(BaseModel):
+    lecture_id: int
+    total_set_count: int
+    total_quiz_count: int
+    sets: List[QuizSetWithQuizzesResponse]
 
 
 class QuizRegenerateRequest(BaseModel):
