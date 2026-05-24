@@ -1,9 +1,11 @@
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = "";
 
 async function request(path, options = {}) {
+  const token = localStorage.getItem("access_token");
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
     ...options,
@@ -12,7 +14,7 @@ async function request(path, options = {}) {
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(data?.detail || "요청 처리 중 오류가 발생했습니다.");
+    throw new Error(data?.error || data?.detail || "요청 처리 중 오류가 발생했습니다.");
   }
 
   return data;

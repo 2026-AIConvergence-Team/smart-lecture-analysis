@@ -86,6 +86,11 @@ function QuizSyncApp() {
     }
   }, [role]);
 
+  useEffect(() => {
+    document.body.classList.toggle("class-mode", activeView === "profLive" || activeView === "studentLive");
+    return () => document.body.classList.remove("class-mode");
+  }, [activeView]);
+
   const showBackButton = useMemo(() => {
     return role === "professor" ? activeView !== "courses" : activeView !== "studentCourses";
   }, [role, activeView]);
@@ -176,7 +181,7 @@ function QuizSyncApp() {
                       <div className="title">{course.title}</div>
                       <div className="term">{course.meta}</div>
                     </div>
-                    <span className={`status-tag ${course.status}`}>
+                    <span className={`status-tag pill ${course.status}`}>
                       {course.status === 'live' ? '진행 중' : course.status === 'soon' ? '준비 중' : course.status === 'done' ? '종료' : '대기'}
                     </span>
                     <div className="meta">
@@ -207,22 +212,22 @@ function QuizSyncApp() {
           </div>
 
           <div className="stepper">
-            <div className={`step ${activeView === "setup" ? "active" : ""}`}>
+            <div className={`step ${currentStep === 1 ? "active" : currentStep > 1 ? "done" : ""}`}>
               <div className="n">1</div>
               <div className="lbl">수업 코드</div>
             </div>
             <div className={`step-line ${currentStep > 1 ? "done" : ""}`}></div>
-            <div className={`step ${currentStep >= 2 ? "active" : ""}`}>
+            <div className={`step ${currentStep === 2 ? "active" : currentStep > 2 ? "done" : ""}`}>
               <div className="n">2</div>
               <div className="lbl">학생 입장</div>
             </div>
             <div className={`step-line ${currentStep > 2 ? "done" : ""}`}></div>
-            <div className={`step ${currentStep >= 3 ? "active" : ""}`}>
+            <div className={`step ${currentStep === 3 ? "active" : currentStep > 3 ? "done" : ""}`}>
               <div className="n">3</div>
               <div className="lbl">강의자료 업로드</div>
             </div>
             <div className={`step-line ${currentStep > 3 ? "done" : ""}`}></div>
-            <div className={`step ${currentStep >= 4 ? "active" : ""}`}>
+            <div className={`step ${currentStep === 4 ? "active" : ""}`}>
               <div className="n">4</div>
               <div className="lbl">수업 시작</div>
             </div>
@@ -244,7 +249,7 @@ function QuizSyncApp() {
                     <button className="btn btn-ghost btn-sm" type="button" onClick={() => setClassCode(Math.random().toString(36).substring(2, 8).toUpperCase())}>코드 재생성</button>
                     <button className="btn btn-ghost btn-sm" type="button">QR 보기</button>
                   </div>
-                  <div className="join-counter">지금 <strong>{joinCount}</strong>명이 입장하고 있어요</div>
+                  <div className="join-counter"><span className="dot" />지금 <strong>{joinCount}</strong>명이 입장하고 있어요</div>
                 </div>
                 <p className="tiny-text">익명 입장 기준입니다. 학생 명단은 노출되지 않으며 다음 단계와 동시에 진행할 수 있어요.</p>
               </div>
@@ -484,7 +489,7 @@ function QuizSyncApp() {
                   <div className="title">{course.title}</div>
                   <div className="term">{course.meta}</div>
                 </div>
-                <span className={`status-tag ${course.status}`}>
+                <span className={`status-tag pill ${course.status}`}>
                   {course.status === "live" ? "수업 중" : course.status === "done" ? "복습" : course.status === "soon" ? "곧 시작" : "대기"}
                 </span>
                 <div className="meta">
