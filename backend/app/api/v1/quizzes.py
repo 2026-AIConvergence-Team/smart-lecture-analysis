@@ -47,9 +47,6 @@ from app.services.quiz.quiz_validation import (
 
 router = APIRouter(tags=["Quizzes"])
 
-
-# Groq on_demand/무료 TPM 환경에서는 한 번에 12문항을 전부 AI로 만들면 429가 쉽게 납니다.
-# 그래서 Groq는 알고리즘 초안을 먼저 만든 뒤 일부 문항만 AI로 개선합니다.
 GROQ_AI_MAX_ENHANCE_ITEMS = 3
 
 
@@ -84,8 +81,15 @@ def quiz_to_response_dict(
     quiz: models.Quiz,
     concept: Optional[models.Concept] = None,
 ) -> dict:
+    set_id = (
+        getattr(quiz, "generation_job_id", None)
+        if quiz_model_supports_generation_job_id()
+        else None
+    )
+
     response = {
         "quiz_id": quiz.id,
+        "set_id": set_id,
         "lecture_id": quiz.lecture_id,
         "concept_id": quiz.concept_id,
         "concept": get_quiz_display_concept(quiz, concept),
@@ -102,7 +106,7 @@ def quiz_to_response_dict(
     }
 
     if quiz_model_supports_generation_job_id():
-        response["generation_job_id"] = getattr(quiz, "generation_job_id", None)
+        response["generation_job_id"] = set_id
 
     return response
 
@@ -119,7 +123,11 @@ def get_lecture_or_404(db: Session, lecture_id: int):
     return lecture, None
 
 
-def get_quiz_or_404(db: Session, quiz_id: int):
+def get_quiz_or_404(
+    db: Session,
+    quiz_id: int,
+    set_id: Optional[int] = None,
+):
     quiz = quiz_repository.get_quiz_by_id(db, quiz_id)
 
     if not quiz:
@@ -127,6 +135,19 @@ def get_quiz_or_404(db: Session, quiz_id: int):
             status.HTTP_404_NOT_FOUND,
             "해당 퀴즈를 찾을 수 없습니다.",
         )
+
+    if set_id is not None:
+        quiz_set_id = (
+            getattr(quiz, "generation_job_id", None)
+            if quiz_model_supports_generation_job_id()
+            else None
+        )
+
+        if quiz_set_id != set_id:
+            return None, error_response(
+                status.HTTP_404_NOT_FOUND,
+                "해당 set_id에 속한 quiz_id를 찾을 수 없습니다.",
+            )
 
     return quiz, None
 
@@ -497,7 +518,6 @@ def generate_lecture_quizzes(
                 "해당 범위에서 퀴즈를 생성할 수 있는 문장을 찾지 못했습니다.",
             )
 
-        # 저장 전 품질 검수는 생성 방식과 관계없이 동일하게 적용합니다.
         quality_quizzes, rejected_count = filter_quality_quizzes(
             generated_quizzes,
             option_count=request_data.option_count,
@@ -593,6 +613,7 @@ def generate_lecture_quizzes(
         return {
             "lecture_id": lecture_id,
             "job_id": job.id,
+            "set_id": job.id,
             "status": "completed",
             "page_start": request_data.page_start,
             "page_end": request_data.page_end,
@@ -664,6 +685,7 @@ def get_quiz_generation_status(
     return {
         "lecture_id": lecture_id,
         "job_id": latest_job.id,
+        "set_id": latest_job.id,
         "status": latest_job.status,
         "progress": latest_job.progress,
         "page_start": latest_job.page_start,
@@ -692,7 +714,7 @@ def get_lecture_quizzes(
     page_start: Optional[int] = Query(default=None),
     page_end: Optional[int] = Query(default=None),
     concept_id: Optional[int] = Query(default=None),
-    generation_job_id: Optional[int] = Query(default=None),
+    set_id: Optional[int] = Query(default=None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -708,11 +730,11 @@ def get_lecture_quizzes(
         if status_error:
             return status_error
 
-    if generation_job_id is not None:
+    if set_id is not None:
         if not quiz_model_supports_generation_job_id():
             return error_response(
                 status.HTTP_400_BAD_REQUEST,
-                "generation_job_id 필터를 사용하려면 Quiz 모델과 DB에 generation_job_id 컬럼을 추가해야 합니다.",
+                "set_id 필터를 사용하려면 Quiz 모델과 DB에 generation_job_id 컬럼이 필요합니다.",
             )
 
     quizzes = quiz_repository.get_lecture_quizzes(
@@ -722,7 +744,7 @@ def get_lecture_quizzes(
         page_start=page_start,
         page_end=page_end,
         concept_id=concept_id,
-        generation_job_id=generation_job_id,
+        generation_job_id=set_id,
     )
 
     concept_ids = [quiz.concept_id for quiz in quizzes if quiz.concept_id]
@@ -762,17 +784,18 @@ def get_quiz_detail(
 
 
 @router.post(
-    "/api/quizzes/{quiz_id}/regenerate",
+    "/api/quiz-sets/{set_id}/quizzes/{quiz_id}/regenerate",
     status_code=status.HTTP_200_OK,
-    summary="Regenerate one quiz",
+    summary="Regenerate one quiz in a quiz set",
 )
 def regenerate_quiz(
     quiz_id: int,
+    set_id: int,
     request_data: schemas.QuizRegenerateRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    quiz, error = get_quiz_or_404(db, quiz_id)
+    quiz, error = get_quiz_or_404(db, quiz_id, set_id)
     if error:
         return error
 
@@ -872,17 +895,18 @@ def regenerate_quiz(
 
 
 @router.patch(
-    "/api/quizzes/{quiz_id}",
+    "/api/quiz-sets/{set_id}/quizzes/{quiz_id}",
     status_code=status.HTTP_200_OK,
-    summary="Update quiz",
+    summary="Update quiz in a quiz set",
 )
 def update_quiz(
     quiz_id: int,
+    set_id: int,
     request_data: schemas.QuizUpdateRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    quiz, error = get_quiz_or_404(db, quiz_id)
+    quiz, error = get_quiz_or_404(db, quiz_id, set_id)
     if error:
         return error
 
@@ -956,16 +980,17 @@ def update_quiz(
 
 
 @router.delete(
-    "/api/quizzes/{quiz_id}",
+    "/api/quiz-sets/{set_id}/quizzes/{quiz_id}",
     status_code=status.HTTP_200_OK,
-    summary="Soft delete quiz",
+    summary="Soft delete quiz in a quiz set",
 )
 def delete_quiz(
     quiz_id: int,
+    set_id: int,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    quiz, error = get_quiz_or_404(db, quiz_id)
+    quiz, error = get_quiz_or_404(db, quiz_id, set_id)
     if error:
         return error
 
@@ -982,6 +1007,7 @@ def delete_quiz(
 
     return {
         "quiz_id": quiz.id,
+        "set_id": set_id,
         "previous_status": previous_status,
         "current_status": quiz.status,
         "message": "퀴즈가 삭제되었습니다.",
@@ -1068,17 +1094,18 @@ def create_manual_quiz(
 
 
 @router.patch(
-    "/api/quizzes/{quiz_id}/status",
+    "/api/quiz-sets/{set_id}/quizzes/{quiz_id}/status",
     status_code=status.HTTP_200_OK,
-    summary="Update quiz status",
+    summary="Update quiz status in a quiz set",
 )
 def update_quiz_status(
     quiz_id: int,
+    set_id: int,
     request_data: schemas.QuizStatusUpdateRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    quiz, error = get_quiz_or_404(db, quiz_id)
+    quiz, error = get_quiz_or_404(db, quiz_id, set_id)
     if error:
         return error
 
@@ -1109,6 +1136,7 @@ def update_quiz_status(
 
     return {
         "quiz_id": quiz.id,
+        "set_id": set_id,
         "previous_status": previous_status,
         "current_status": quiz.status,
         "message": "퀴즈 상태가 변경되었습니다.",

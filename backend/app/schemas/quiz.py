@@ -25,6 +25,7 @@ class QuizGenerateRequest(BaseModel):
 class QuizGenerateResponse(BaseModel):
     lecture_id: int
     job_id: int
+    set_id: int
     status: str
 
     page_start: int
@@ -44,6 +45,7 @@ class QuizGenerateResponse(BaseModel):
 
 class QuizItemResponse(BaseModel):
     quiz_id: int
+    set_id: Optional[int] = None
     lecture_id: int
 
     concept_id: Optional[int] = None
@@ -71,6 +73,7 @@ class QuizItemResponse(BaseModel):
 class QuizGenerateStatusResponse(BaseModel):
     lecture_id: int
     job_id: int
+    set_id: int
 
     status: str
     progress: int
