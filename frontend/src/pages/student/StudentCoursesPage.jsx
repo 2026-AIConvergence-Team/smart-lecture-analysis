@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import RoleLayout from "../../components/RoleLayout.jsx";
+import { joinLectureByCode } from "../../api/lectureApi.js";
 
 const DEFAULT_COURSES = [
   { id: "ds",   year: 2026, term: "1학기", title: "자료구조론",   section: "01", students: 32, meta: "컴퓨터공학과 · 월/수 10:30", status: "live", week: 5 },
@@ -16,7 +17,7 @@ const STATUS_PILL = {
   done: <span className="status-tag pill pill-neutral">종료</span>,
 };
 
-function CodeJoinModal({ open, course, onClose, onJoin }) {
+function CodeJoinModal({ open, course, onClose, onJoin, externalError }) {
   const [code, setCode] = useState(["", "", "", "", "", ""]);
   const [error, setError] = useState("");
 
@@ -118,7 +119,7 @@ function CodeJoinModal({ open, course, onClose, onJoin }) {
             marginTop: 14, fontSize: 12,
             color: "var(--danger)", textAlign: "center", minHeight: 14,
           }}>
-            {error}
+            {externalError || error}
           </p>
         </div>
 
@@ -146,6 +147,7 @@ function CodeJoinModal({ open, course, onClose, onJoin }) {
 function StudentCoursesPage() {
   const navigate = useNavigate();
   const [modalCourse, setModalCourse] = useState(null);
+  const [joinError, setJoinError] = useState("");
 
   const active = DEFAULT_COURSES.filter((c) => c.status !== "done");
   const past   = DEFAULT_COURSES.filter((c) => c.status === "done");
@@ -154,13 +156,21 @@ function StudentCoursesPage() {
     if (c.status === "done") {
       navigate("/student/review");
     } else if (c.status === "live") {
+      setJoinError("");
       setModalCourse(c);
     }
   };
 
   const handleJoin = (code) => {
-    setModalCourse(null);
-    navigate("/student/live");
+    joinLectureByCode(code)
+      .then((res) => {
+        setModalCourse(null);
+        setJoinError("");
+        navigate("/student/live", { state: { lectureId: res?.lecture_id } });
+      })
+      .catch((err) => {
+        setJoinError(err.message || "수업 코드가 올바르지 않습니다.");
+      });
   };
 
   const renderCard = (c) => {
@@ -222,8 +232,9 @@ function StudentCoursesPage() {
       <CodeJoinModal
         open={!!modalCourse}
         course={modalCourse}
-        onClose={() => setModalCourse(null)}
+        onClose={() => { setModalCourse(null); setJoinError(""); }}
         onJoin={handleJoin}
+        externalError={joinError}
       />
     </RoleLayout>
   );

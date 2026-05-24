@@ -4,7 +4,7 @@ import { CloudUpload, ChevronLeft, Play, Trash2 } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import { keywordsFor, quizFromKeyword, SAMPLE_QUESTIONS } from "../../data/quizSyncMock.js";
 import { setPdfCache, clearSession } from "../../data/sessionCache.js";
-import { createLecture, uploadPdf, extractText, extractConcepts, getConcepts, generateQuizzes, getQuizGenerateStatus } from "../../api/lectureApi.js";
+import { createLecture, uploadPdf, extractText, extractConcepts, getConcepts, generateQuizzes, getQuizGenerateStatus, generateClassCode, updateLectureStatus } from "../../api/lectureApi.js";
 
 const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -62,7 +62,10 @@ function TeacherSetupPage() {
     const title = `${courseName} ${week}주차`;
 
     createLecture({ title, date, time })
-      .then((data) => setLectureId(data.lecture_id ?? data.id))  // 백엔드가 id 또는 lecture_id로 반환
+      .then((data) => {
+        setLectureId(data.lecture_id ?? data.id);
+        if (data.class_code) setCode(data.class_code);  // 서버 발급 코드 사용
+      })
       .catch((err) => console.error("강의 생성 실패:", err));
   }, []);
 
@@ -191,6 +194,10 @@ function TeacherSetupPage() {
 
   const handleStartClass = () => {
     if (!pdfFileName) return;
+    // 강의 상태를 "active"로 변경 (실패해도 진행)
+    if (lectureId) {
+      updateLectureStatus(lectureId, "active").catch(() => {});
+    }
     navigate("/teacher/live", {
       state: {
         code,
@@ -254,7 +261,15 @@ function TeacherSetupPage() {
               <div className="class-code-big mono" style={{ fontSize: "84px", marginTop: "14px", fontWeight: "700" }}>{code}</div>
               <div className="class-code-actions" style={{ marginTop: "22px" }}>
                 <button className="btn btn-ghost btn-sm" type="button" onClick={() => navigator.clipboard.writeText(code)}>복사</button>
-                <button className="btn btn-ghost btn-sm" type="button" onClick={() => setCode(genCode())}>코드 재생성</button>
+                <button className="btn btn-ghost btn-sm" type="button" onClick={() => {
+                  if (lectureId) {
+                    generateClassCode(lectureId)
+                      .then((res) => { if (res?.class_code) setCode(res.class_code); })
+                      .catch(() => setCode(genCode()));
+                  } else {
+                    setCode(genCode());
+                  }
+                }}>코드 재생성</button>
                 <button className="btn btn-ghost btn-sm" type="button">QR 보기</button>
               </div>
               <div className="join-counter" style={{ marginTop: "18px" }}>

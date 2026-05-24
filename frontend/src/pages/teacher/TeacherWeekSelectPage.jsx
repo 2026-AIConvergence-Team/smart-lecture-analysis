@@ -1,18 +1,21 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { ChevronLeft, Play } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
+import { getCourseLectures } from "../../api/courseApi.js";
 
-// 주차별 상태 — course의 현재 week 기준으로 자동 결정
-function weekStatus(w, currentWeek) {
-  if (w < currentWeek) return "done";
-  if (w === currentWeek) return "next";
-  return "idle";
+// 주차 번호 → 뱃지 상태: 실제 수업 데이터 기반
+// lectureMap: { [weekNum]: lecture }
+function weekStatus(w, lectureMap) {
+  const lecture = lectureMap[w];
+  if (!lecture) return "idle";
+  if (lecture.status === "active") return "next";   // 진행 중
+  return "done";                                     // 완료된 수업
 }
 
 const STATUS_PILL = {
   done: <span className="pill pill-neutral">완료</span>,
-  next: <span className="pill pill-brand">진행 예정</span>,
+  next: <span className="pill pill-brand">진행 중</span>,
   idle: null,
 };
 
@@ -21,16 +24,45 @@ function TeacherWeekSelectPage() {
   const location = useLocation();
 
   const {
-    courseId   = null,
-    courseName = "자료구조론",
-    section    = "01",
-    students   = 32,
-    courseMeta = "컴퓨터공학과 · 월/수 10:30",
-    status     = "live",
-    currentWeek = 5,   // 강의가 현재 몇 주차인지
+    courseId    = null,
+    courseName  = "자료구조론",
+    section     = "01",
+    students    = 32,
+    courseMeta  = "컴퓨터공학과 · 월/수 10:30",
+    currentWeek = 5,   // API 연동 전 fallback
   } = location.state || {};
 
   const [selectedWeek, setSelectedWeek] = useState(null);
+  // weekNum → lecture 매핑 (API로 로드)
+  const [lectureMap, setLectureMap] = useState(null);   // null = 로딩 중
+
+  useEffect(() => {
+    if (!courseId) {
+      // courseId 없으면 fallback: currentWeek 기준으로 채우기
+      const fallback = {};
+      for (let i = 1; i < currentWeek; i++) fallback[i] = { status: "ended" };
+      if (currentWeek <= 15) fallback[currentWeek] = { status: "active" };
+      setLectureMap(fallback);
+      return;
+    }
+    getCourseLectures(courseId)
+      .then((lectures) => {
+        const map = {};
+        if (Array.isArray(lectures)) {
+          lectures.forEach((l) => {
+            const m = l.title?.match(/(\d+)주차/);
+            if (m) map[+m[1]] = l;
+          });
+        }
+        setLectureMap(map);
+      })
+      .catch(() => {
+        // 실패 시 fallback
+        const fallback = {};
+        for (let i = 1; i < currentWeek; i++) fallback[i] = { status: "ended" };
+        setLectureMap(fallback);
+      });
+  }, [courseId]);
 
   const handleStart = () => {
     if (!selectedWeek) return;
@@ -104,7 +136,7 @@ function TeacherWeekSelectPage() {
             gap: 10,
           }}>
             {Array.from({ length: 15 }, (_, i) => i + 1).map((w) => {
-              const st = weekStatus(w, currentWeek);
+              const st = lectureMap ? weekStatus(w, lectureMap) : "idle";
               const isSelected = selectedWeek === w;
               return (
                 <button

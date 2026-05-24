@@ -122,20 +122,20 @@ export function getQuizDetail(quizId) {
 }
 
 // ── 퀴즈 수정 ─────────────────────────────────────────
-// PATCH /api/quizzes/{quiz_id}
+// PATCH /api/quiz-sets/{set_id}/quizzes/{quiz_id}
 // { question?, options?, answer?, explanation?, status? } → 수정된 퀴즈 전체 반환
-export function updateQuiz(quizId, payload) {
-  return request(`/api/quizzes/${quizId}`, {
+export function updateQuiz(setId, quizId, payload) {
+  return request(`/api/quiz-sets/${setId}/quizzes/${quizId}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
   });
 }
 
 // ── 퀴즈 삭제 (소프트) ────────────────────────────────
-// DELETE /api/quizzes/{quiz_id}
-// → { quiz_id, previous_status, current_status: "DELETED", message }
-export function deleteQuiz(quizId) {
-  return request(`/api/quizzes/${quizId}`, {
+// DELETE /api/quiz-sets/{set_id}/quizzes/{quiz_id}
+// → { quiz_id, set_id, previous_status, current_status: "DELETED", message }
+export function deleteQuiz(setId, quizId) {
+  return request(`/api/quiz-sets/${setId}/quizzes/${quizId}`, {
     method: "DELETE",
   });
 }
@@ -152,11 +152,69 @@ export function createManualQuiz(lectureId, payload) {
 }
 
 // ── 퀴즈 상태 변경 ────────────────────────────────────
-// PATCH /api/quizzes/{quiz_id}/status
+// PATCH /api/quiz-sets/{set_id}/quizzes/{quiz_id}/status
 // { status: "DRAFT" | "READY" | "DELETED" }
-// → 수정된 퀴즈 전체 반환
-export function updateQuizStatus(quizId, status) {
-  return request(`/api/quizzes/${quizId}/status`, {
+// → { quiz_id, set_id, previous_status, current_status, message }
+export function updateQuizStatus(setId, quizId, status) {
+  return request(`/api/quiz-sets/${setId}/quizzes/${quizId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+// ── 수업 코드 발급 (재생성) ────────────────────────────
+// POST /api/lectures/{lecture_id}/code
+// → { lecture_id, class_code }
+export function generateClassCode(lectureId) {
+  return request(`/api/lectures/${lectureId}/code`, {
+    method: "POST",
+  });
+}
+
+// ── 수업 참가 (lecture_id + class_code) ───────────────
+// POST /api/lectures/{lecture_id}/join
+// { class_code } → { participant_id, lecture_id, user_id, joined_at, class_code, already_joined }
+export function joinLecture(lectureId, classCode) {
+  return request(`/api/lectures/${lectureId}/join`, {
+    method: "POST",
+    body: JSON.stringify({ class_code: classCode }),
+  });
+}
+
+// ── 강의실 입장 (class_code만으로 입장) ───────────────
+// POST /api/lectures/join
+// { class_code } → { participant_id, lecture_id, ... }
+export function joinLectureByCode(classCode) {
+  return request(`/api/lectures/join`, {
+    method: "POST",
+    body: JSON.stringify({ class_code: classCode }),
+  });
+}
+
+// ── 강의 상태 변경 ─────────────────────────────────────
+// PATCH /api/lectures/{lecture_id}/status
+// { status: "active" | "ended" }
+// → { id, course_id, title, date, time, class_code, status, created_at }
+export function updateLectureStatus(lectureId, status) {
+  return request(`/api/lectures/${lectureId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+// ── 한 수업의 세트 목록 조회 ────────────────────────────
+// GET /api/lectures/{lecture_id}/quiz-sets
+// → { lecture_id, total_count, sets: [{set_id, lecture_id, generation_job_id,
+//     set_number, page_start, page_end, status, quiz_count, created_at, updated_at}] }
+export function getQuizSets(lectureId) {
+  return request(`/api/lectures/${lectureId}/quiz-sets`);
+}
+
+// ── 특정 세트 상태 변경 ────────────────────────────────
+// PATCH /api/quiz-sets/{set_id}/status
+// { status } → { status: "string" }
+export function updateQuizSetStatus(setId, status) {
+  return request(`/api/quiz-sets/${setId}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status }),
   });
