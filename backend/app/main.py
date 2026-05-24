@@ -3,10 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.db.base import Base
+from app.db.schema_compat import ensure_sqlite_schema_compatibility
 from app.db.session import engine
 
 
 Base.metadata.create_all(bind=engine)
+ensure_sqlite_schema_compatibility(engine)
 
 app = FastAPI(
     title="Smart Lecture Analysis Auth API",

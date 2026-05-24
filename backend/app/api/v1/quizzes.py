@@ -13,6 +13,7 @@ from app.repositories import (
     lecture_repository,
     quiz_generation_job_repository,
     quiz_repository,
+    quiz_set_repository,
 )
 from app.services.quiz.quiz_generation import (
     AI_BATCH_SIZE,
@@ -35,10 +36,12 @@ from app.services.quiz.ai_quiz_generation import (
 from app.services.quiz.quiz_validation import (
     error_response,
     normalize_difficulty,
+    normalize_quiz_set_status,
     normalize_quiz_status,
     normalize_quiz_type,
     validate_difficulty,
     validate_options_and_answer,
+    validate_quiz_set_status,
     validate_quiz_status,
     validate_quiz_type,
     validate_ready_quiz,
@@ -55,6 +58,10 @@ def quiz_model_supports_generation_job_id() -> bool:
     Quiz 모델의 generation_job_id 지원 여부를 확인합니다.
     """
     return hasattr(models.Quiz, "generation_job_id")
+
+
+def quiz_model_supports_set_id() -> bool:
+    return hasattr(models.Quiz, "set_id")
 
 def get_quiz_display_concept(
     quiz: models.Quiz,
@@ -81,15 +88,9 @@ def quiz_to_response_dict(
     quiz: models.Quiz,
     concept: Optional[models.Concept] = None,
 ) -> dict:
-    set_id = (
-        getattr(quiz, "generation_job_id", None)
-        if quiz_model_supports_generation_job_id()
-        else None
-    )
-
     response = {
         "quiz_id": quiz.id,
-        "set_id": set_id,
+        "set_id": quiz.set_id,
         "lecture_id": quiz.lecture_id,
         "concept_id": quiz.concept_id,
         "concept": get_quiz_display_concept(quiz, concept),
@@ -106,9 +107,27 @@ def quiz_to_response_dict(
     }
 
     if quiz_model_supports_generation_job_id():
-        response["generation_job_id"] = set_id
+        response["generation_job_id"] = quiz.generation_job_id
 
     return response
+
+
+def quiz_set_to_response_dict(
+    quiz_set: models.QuizSet,
+    quiz_count: int = 0,
+) -> dict:
+    return {
+        "set_id": quiz_set.id,
+        "lecture_id": quiz_set.lecture_id,
+        "generation_job_id": quiz_set.generation_job_id,
+        "set_number": quiz_set.set_number,
+        "page_start": quiz_set.page_start,
+        "page_end": quiz_set.page_end,
+        "status": quiz_set.status,
+        "quiz_count": quiz_count,
+        "created_at": quiz_set.created_at.isoformat() if quiz_set.created_at else None,
+        "updated_at": quiz_set.updated_at.isoformat() if quiz_set.updated_at else None,
+    }
 
 
 def get_lecture_or_404(db: Session, lecture_id: int):
@@ -138,8 +157,8 @@ def get_quiz_or_404(
 
     if set_id is not None:
         quiz_set_id = (
-            getattr(quiz, "generation_job_id", None)
-            if quiz_model_supports_generation_job_id()
+            getattr(quiz, "set_id", None)
+            if quiz_model_supports_set_id()
             else None
         )
 
@@ -180,7 +199,7 @@ def get_latest_job_quizzes_query(
         db=db,
         lecture_id=lecture_id,
         latest_job=latest_job,
-        supports_generation_job_id=quiz_model_supports_generation_job_id(),
+        quiz_set=quiz_set_repository.get_quiz_set_by_job_id(db, latest_job.id),
     )
 
 def refill_quality_quizzes(
@@ -576,12 +595,24 @@ def generate_lecture_quizzes(
 
         generation_mode = "hybrid" if ai_enhanced_count > 0 else "algorithm"
 
+        quiz_set = models.QuizSet(
+            lecture_id=lecture_id,
+            generation_job_id=job.id,
+            set_number=quiz_set_repository.get_next_set_number(db, lecture_id),
+            page_start=request_data.page_start,
+            page_end=request_data.page_end,
+            status="DRAFT",
+        )
+        quiz_set_repository.create_quiz_set(db, quiz_set)
+
         saved_quizzes = []
 
         for item in generated_quizzes:
             new_quiz = models.Quiz(
                 lecture_id=item["lecture_id"],
                 concept_id=item["concept_id"],
+                set_id=quiz_set.id,
+                generation_job_id=job.id,
                 quiz_type=item["quiz_type"],
                 question=item["question"],
                 options=serialize_options(item["options"]),
@@ -591,9 +622,6 @@ def generate_lecture_quizzes(
                 page_num=item["page_num"],
                 status="DRAFT",
             )
-
-            if quiz_model_supports_generation_job_id():
-                new_quiz.generation_job_id = job.id
 
             saved_quizzes.append(new_quiz)
 
@@ -613,7 +641,7 @@ def generate_lecture_quizzes(
         return {
             "lecture_id": lecture_id,
             "job_id": job.id,
-            "set_id": job.id,
+            "set_id": quiz_set.id,
             "status": "completed",
             "page_start": request_data.page_start,
             "page_end": request_data.page_end,
@@ -670,11 +698,13 @@ def get_quiz_generation_status(
             "퀴즈 생성 작업을 찾을 수 없습니다.",
         )
 
+    latest_set = quiz_set_repository.get_quiz_set_by_job_id(db, latest_job.id)
+
     quizzes = quiz_repository.get_latest_job_quizzes(
         db=db,
         lecture_id=lecture_id,
         latest_job=latest_job,
-        supports_generation_job_id=quiz_model_supports_generation_job_id(),
+        quiz_set=latest_set,
     )
 
     concept_ids = [quiz.concept_id for quiz in quizzes if quiz.concept_id]
@@ -685,7 +715,7 @@ def get_quiz_generation_status(
     return {
         "lecture_id": lecture_id,
         "job_id": latest_job.id,
-        "set_id": latest_job.id,
+        "set_id": latest_set.id if latest_set else None,
         "status": latest_job.status,
         "progress": latest_job.progress,
         "page_start": latest_job.page_start,
@@ -695,7 +725,7 @@ def get_quiz_generation_status(
         "failed_count": latest_job.failed_count,
         "returned_count": len(quizzes),
         "message": latest_job.message,
-        "uses_generation_job_id": quiz_model_supports_generation_job_id(),
+        "uses_set_id": latest_set is not None,
         "quizzes": [
             quiz_to_response_dict(quiz, concept_map.get(quiz.concept_id))
             for quiz in quizzes
@@ -705,6 +735,7 @@ def get_quiz_generation_status(
 
 @router.get(
     "/api/lectures/{lecture_id}/quizzes",
+    response_model=schemas.LectureQuizSetsWithQuizzesResponse,
     status_code=status.HTTP_200_OK,
     summary="Get lecture quizzes",
 )
@@ -731,11 +762,23 @@ def get_lecture_quizzes(
             return status_error
 
     if set_id is not None:
-        if not quiz_model_supports_generation_job_id():
+        if not quiz_model_supports_set_id():
             return error_response(
                 status.HTTP_400_BAD_REQUEST,
-                "set_id 필터를 사용하려면 Quiz 모델과 DB에 generation_job_id 컬럼이 필요합니다.",
+                "set_id 필터를 사용하려면 Quiz 모델과 DB에 set_id 컬럼이 필요합니다.",
             )
+        quiz_set = quiz_set_repository.get_quiz_set_by_id(db, set_id)
+        if not quiz_set or quiz_set.lecture_id != lecture_id:
+            return error_response(
+                status.HTTP_404_NOT_FOUND,
+                "Quiz set not found for this lecture.",
+            )
+        quiz_sets = [quiz_set]
+    else:
+        quiz_sets = quiz_set_repository.get_quiz_sets_by_lecture(
+            db=db,
+            lecture_id=lecture_id,
+        )
 
     quizzes = quiz_repository.get_lecture_quizzes(
         db=db,
@@ -744,21 +787,119 @@ def get_lecture_quizzes(
         page_start=page_start,
         page_end=page_end,
         concept_id=concept_id,
-        generation_job_id=set_id,
+        set_id=set_id,
     )
 
     concept_ids = [quiz.concept_id for quiz in quizzes if quiz.concept_id]
     concepts = concept_repository.get_concepts_by_ids(db, concept_ids) if concept_ids else []
 
     concept_map = {concept.id: concept for concept in concepts}
+    quizzes_by_set_id: dict[int, list[models.Quiz]] = {}
+    for quiz in quizzes:
+        if quiz.set_id is None:
+            continue
+        quizzes_by_set_id.setdefault(quiz.set_id, []).append(quiz)
 
     return {
         "lecture_id": lecture_id,
-        "total_count": len(quizzes),
-        "quizzes": [
-            quiz_to_response_dict(quiz, concept_map.get(quiz.concept_id))
-            for quiz in quizzes
+        "total_set_count": len(quiz_sets),
+        "total_quiz_count": len(quizzes),
+        "sets": [
+            {
+                **quiz_set_to_response_dict(
+                    quiz_set,
+                    quiz_count=len(quizzes_by_set_id.get(quiz_set.id, [])),
+                ),
+                "quizzes": [
+                    quiz_to_response_dict(quiz, concept_map.get(quiz.concept_id))
+                    for quiz in quizzes_by_set_id.get(quiz_set.id, [])
+                ],
+            }
+            for quiz_set in quiz_sets
         ],
+    }
+
+
+@router.get(
+    "/api/lectures/{lecture_id}/quiz-sets",
+    status_code=status.HTTP_200_OK,
+    summary="Get quiz sets for a lecture",
+)
+def get_lecture_quiz_sets(
+    lecture_id: int,
+    set_status: Optional[str] = Query(default=None, alias="status"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    lecture, error = get_lecture_or_404(db, lecture_id)
+    if error:
+        return error
+
+    normalized_status = None
+    if set_status:
+        normalized_status = normalize_quiz_set_status(set_status)
+        status_error = validate_quiz_set_status(normalized_status)
+        if status_error:
+            return status_error
+
+    quiz_sets = quiz_set_repository.get_quiz_sets_by_lecture(
+        db=db,
+        lecture_id=lecture_id,
+        set_status=normalized_status,
+    )
+
+    return {
+        "lecture_id": lecture_id,
+        "total_count": len(quiz_sets),
+        "sets": [
+            quiz_set_to_response_dict(
+                quiz_set,
+                quiz_count=len(
+                    quiz_repository.get_lecture_quizzes(
+                        db=db,
+                        lecture_id=lecture_id,
+                        set_id=quiz_set.id,
+                    )
+                ),
+            )
+            for quiz_set in quiz_sets
+        ],
+    }
+
+
+@router.patch(
+    "/api/quiz-sets/{set_id}/status",
+    status_code=status.HTTP_200_OK,
+    summary="Update quiz set status",
+)
+def update_quiz_set_status(
+    set_id: int,
+    request_data: schemas.QuizSetStatusUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    quiz_set = quiz_set_repository.get_quiz_set_by_id(db, set_id)
+    if not quiz_set:
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "해당 set_id를 찾을 수 없습니다.",
+        )
+
+    new_status = normalize_quiz_set_status(request_data.status)
+    status_error = validate_quiz_set_status(new_status)
+    if status_error:
+        return status_error
+
+    previous_status = quiz_set.status
+    quiz_set.status = new_status
+    quiz_set_repository.save_quiz_set(db, quiz_set)
+
+    return {
+        "set_id": quiz_set.id,
+        "lecture_id": quiz_set.lecture_id,
+        "previous_status": previous_status,
+        "current_status": quiz_set.status,
+        "message": "퀴즈 세트 상태가 변경되었습니다.",
     }
 
 
@@ -1075,9 +1216,30 @@ def create_manual_quiz(
                 "해당 개념을 찾을 수 없습니다.",
             )
 
+    quiz_set = None
+    if request_data.set_id is not None:
+        quiz_set = quiz_set_repository.get_quiz_set_by_id(db, request_data.set_id)
+        if not quiz_set or quiz_set.lecture_id != lecture_id:
+            return error_response(
+                status.HTTP_404_NOT_FOUND,
+                "해당 강의에 속한 set_id를 찾을 수 없습니다.",
+            )
+    else:
+        quiz_set = models.QuizSet(
+            lecture_id=lecture_id,
+            generation_job_id=None,
+            set_number=quiz_set_repository.get_next_set_number(db, lecture_id),
+            page_start=request_data.page,
+            page_end=request_data.page,
+            status="DRAFT",
+        )
+        quiz_set_repository.create_quiz_set(db, quiz_set)
+
     new_quiz = models.Quiz(
         lecture_id=lecture_id,
         concept_id=request_data.concept_id,
+        set_id=quiz_set.id,
+        generation_job_id=quiz_set.generation_job_id,
         quiz_type=quiz_type,
         question=request_data.question.strip(),
         options=json.dumps(request_data.options, ensure_ascii=False),
