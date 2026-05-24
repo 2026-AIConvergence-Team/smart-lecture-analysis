@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 
 const STATUS_PILL = {
@@ -47,6 +47,7 @@ function groupBySemester(courses) {
   return map;
 }
 
+// ── 강의 추가 모달 ───────────────────────────────────────
 function AddCourseModal({ open, onClose, onAdd }) {
   const [form, setForm] = useState({ year: 2026, term: "1학기", title: "", section: "01", students: 30, meta: "" });
 
@@ -107,10 +108,56 @@ function AddCourseModal({ open, onClose, onAdd }) {
   );
 }
 
+// ── 강의 삭제 확인 모달 ──────────────────────────────────
+function DeleteConfirmModal({ course, onClose, onConfirm }) {
+  if (!course) return null;
+  return (
+    <div
+      className="modal-backdrop open"
+      id="courseDeleteModal"
+      onClick={(e) => e.target.id === "courseDeleteModal" && onClose()}
+    >
+      <div className="modal" style={{ maxWidth: 400 }}>
+        <div className="modal-head">
+          <h3>강의 삭제</h3>
+          <p>이 강의를 목록에서 삭제하시겠습니까?</p>
+        </div>
+        <div className="modal-body">
+          <div style={{
+            padding: "12px 14px",
+            background: "var(--zinc-50)",
+            border: "1px solid var(--zinc-200)",
+            borderRadius: 10,
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--zinc-900)" }}>{course.title}</div>
+            <div style={{ fontSize: 12, color: "var(--zinc-500)", marginTop: 2 }}>{course.meta}</div>
+          </div>
+          <p style={{ marginTop: 12, fontSize: 13, color: "var(--zinc-500)" }}>
+            삭제한 강의는 복구할 수 없습니다.
+          </p>
+        </div>
+        <div className="modal-foot">
+          <button className="btn btn-ghost" type="button" onClick={onClose}>취소</button>
+          <button
+            className="btn"
+            type="button"
+            onClick={onConfirm}
+            style={{ background: "#ef4444", color: "#fff", borderColor: "#ef4444" }}
+          >
+            삭제
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 메인 페이지 ──────────────────────────────────────────
 function TeacherCoursesPage() {
   const navigate = useNavigate();
   const [courses, setCourses] = useState(loadCourses);
   const [modalOpen, setModalOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);   // 삭제 확인 대상 강의
 
   const groups = groupBySemester(courses);
 
@@ -121,7 +168,25 @@ function TeacherCoursesPage() {
   };
 
   const handleCardClick = (c) => {
-    navigate("/teacher/setup", { state: { courseName: c.title, week: c.week } });
+    navigate("/teacher/week-select", {
+      state: {
+        courseId:    c.id,
+        courseName:  c.title,
+        section:     c.section,
+        students:    c.students,
+        courseMeta:  c.meta,
+        status:      c.status,
+        currentWeek: c.week,
+      },
+    });
+  };
+
+  const handleDeleteConfirm = () => {
+    if (!deleteTarget) return;
+    const updated = courses.filter((c) => c.id !== deleteTarget.id);
+    setCourses(updated);
+    saveCourses(updated);
+    setDeleteTarget(null);
   };
 
   return (
@@ -149,11 +214,15 @@ function TeacherCoursesPage() {
               </div>
               <div className="course-grid">
                 {list.map((c) => (
-                  <button
+                  /* button 안에 button은 HTML 오류 → div[role=button]으로 카드 처리 */
+                  <div
                     key={c.id}
                     className="course-card"
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => handleCardClick(c)}
+                    onKeyDown={(e) => e.key === "Enter" && handleCardClick(c)}
+                    style={{ cursor: "pointer", position: "relative" }}
                   >
                     <div>
                       <div className="title">{c.title}</div>
@@ -162,9 +231,36 @@ function TeacherCoursesPage() {
                     {STATUS_PILL[c.status]}
                     <div className="meta">
                       <span className="key">수강생 {c.students}명 · {c.week}주차</span>
-                      <span style={{ color: "var(--brand-deep)", fontWeight: 600 }}>{CTA_LABEL[c.status]}</span>
+                      <span style={{ color: "var(--brand-deep)", fontWeight: 600 }}>
+                        {CTA_LABEL[c.status]}
+                      </span>
                     </div>
-                  </button>
+                    {/* 휴지통 버튼 — 카드 우측 하단 절대 위치 */}
+                    <button
+                      type="button"
+                      title="강의 삭제"
+                      onClick={(e) => { e.stopPropagation(); setDeleteTarget(c); }}
+                      style={{
+                        position: "absolute",
+                        bottom: 10,
+                        right: 10,
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        color: "var(--zinc-300)",
+                        padding: "4px",
+                        borderRadius: 5,
+                        display: "flex",
+                        alignItems: "center",
+                        lineHeight: 1,
+                        transition: "color .15s",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = "#ef4444"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--zinc-300)"; }}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -173,6 +269,11 @@ function TeacherCoursesPage() {
       </div>
 
       <AddCourseModal open={modalOpen} onClose={() => setModalOpen(false)} onAdd={handleAdd} />
+      <DeleteConfirmModal
+        course={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteConfirm}
+      />
     </RoleLayout>
   );
 }

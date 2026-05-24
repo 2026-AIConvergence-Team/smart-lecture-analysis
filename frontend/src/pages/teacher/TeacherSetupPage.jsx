@@ -3,6 +3,8 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { CloudUpload, ChevronLeft, Play, Trash2 } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import { keywordsFor, quizFromKeyword, SAMPLE_QUESTIONS } from "../../data/quizSyncMock.js";
+import { setPdfCache, clearSession } from "../../data/sessionCache.js";
+import { createLecture, uploadPdf, extractText, extractConcepts, getConcepts, generateQuizzes, getQuizGenerateStatus } from "../../api/lectureApi.js";
 
 const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -14,6 +16,16 @@ function genCode() {
   return code;
 }
 
+function estimatePdfPages(data) {
+  try {
+    const text = new TextDecoder("latin1").decode(data);
+    const matches = text.match(/\/Type\s*\/Page\b/g);
+    return matches?.length || 0;
+  } catch {
+    return 0;
+  }
+}
+
 function TeacherSetupPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -22,10 +34,15 @@ function TeacherSetupPage() {
   const courseMeta = location.state?.courseMeta || "2025-1 / 월,수,금";
 
   // 상태 관리
+  const [lectureId, setLectureId] = useState(null);   // DB에 생성된 강의 ID
+  const [pdfFile, setPdfFile] = useState(null);        // 서버 업로드용 File 객체
   const [code, setCode] = useState(genCode());
   const [joinCount, setJoinCount] = useState(0);
   const [pdfFileName, setPdfFileName] = useState(null);
   const [pdfMeta, setPdfMeta] = useState(null);
+  const [pdfReady, setPdfReady] = useState(false);
+  const [pdfUploadError, setPdfUploadError] = useState(null);
+  const [concepts, setConcepts] = useState([]);               // 서버에서 받은 전체 개념 목록 (concept_id 포함)
   const [pdfPage, setPdfPage] = useState(1);
   const [pdfTotal, setPdfTotal] = useState(8);
   const [rangeStart, setRangeStart] = useState(1);
@@ -36,6 +53,40 @@ function TeacherSetupPage() {
 
   // 현재 스텝 계산
   const currentStep = pdfFileName ? 3 : joinCount > 0 ? 2 : 1;
+
+  // 페이지 열리자마자 강의 생성 API 호출 → lecture_id 저장
+  useEffect(() => {
+    const today = new Date();
+    const date = today.toISOString().split("T")[0];          // "2026-05-24"
+    const time = today.toTimeString().slice(0, 5);            // "10:30"
+    const title = `${courseName} ${week}주차`;
+
+    createLecture({ title, date, time })
+      .then((data) => setLectureId(data.lecture_id ?? data.id))  // 백엔드가 id 또는 lecture_id로 반환
+      .catch((err) => console.error("강의 생성 실패:", err));
+  }, []);
+
+  // lectureId와 pdfFile 둘 다 준비되면:
+  // PDF 업로드 → 텍스트 추출 → 개념 추출 → 개념 목록 조회 (순서대로, 모두 동기)
+  useEffect(() => {
+    if (!lectureId || !pdfFile) return;
+
+    uploadPdf(lectureId, pdfFile)
+      .then((data) => {
+        if (data?.total_pages) setPdfTotal(data.total_pages);
+        return extractText(lectureId);              // 텍스트 추출 (동기)
+      })
+      .then(() => extractConcepts(lectureId))       // 개념 추출 (동기)
+      .then(() => getConcepts(lectureId))            // 개념 목록 조회
+      .then((res) => {
+        const list = res.concepts || [];
+        setConcepts(list);
+        setExtractedKeywords(list.map((c) => c.concept_name));  // 키워드 태그 UI 업데이트
+      })
+      .catch((err) => {
+        setPdfUploadError(err.message || "처리 중 오류가 발생했습니다.");
+      });
+  }, [lectureId, pdfFile]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -57,8 +108,19 @@ function TeacherSetupPage() {
     }
     setPdfFileName(file.name);
     setPdfMeta({ size: file.size, type: file.type });
-    setPdfTotal(12);
     setPdfPage(1);
+    setPdfReady(false);
+    setPdfUploadError(null);
+
+    // 바이너리 캐시 (로컬 뷰어용) → 완료되면 버튼 활성화 + 서버 업로드 트리거
+    file.arrayBuffer().then((buf) => {
+      const pdfBytes = new Uint8Array(buf);
+      const localTotal = estimatePdfPages(pdfBytes) || 12;
+      setPdfTotal(localTotal);
+      setPdfCache(pdfBytes, file.name, localTotal);
+      setPdfReady(true);   // 버튼 활성화
+      setPdfFile(file);    // useEffect([lectureId, pdfFile])가 알아서 업로드 처리
+    });
   };
 
   const handleDragOver = (e) => {
@@ -78,9 +140,13 @@ function TeacherSetupPage() {
   const handlePdfDelete = () => {
     setPdfFileName(null);
     setPdfMeta(null);
+    setPdfReady(false);
+    setPdfUploadError(null);
+    setPdfFile(null);
     setCurrentQuizSet([]);
     setExtractedKeywords([]);
     setSelectedKeywords([]);
+    clearSession();
   };
 
   const handleExtractKeywords = () => {
@@ -99,9 +165,28 @@ function TeacherSetupPage() {
   };
 
   const handleGenerateQuiz = () => {
-    const quizSet = selectedKeywords.map((keyword, index) => quizFromKeyword(keyword, index));
-    if (quizSet.length === 0) return;
-    setCurrentQuizSet(quizSet);
+    if (!lectureId) return;
+
+    // 선택된 키워드 → concept_id 매핑
+    const conceptIds = selectedKeywords
+      .map((kw) => concepts.find((c) => c.concept_name === kw)?.concept_id)
+      .filter(Boolean);
+
+    const payload = {
+      page_start: rangeStart,
+      page_end: rangeEnd,
+      quiz_type: "MIXED",
+      ...(conceptIds.length > 0 && { concept_ids: conceptIds }),
+    };
+
+    // 퀴즈 생성(동기) → 상태 조회로 실제 퀴즈 목록 가져오기
+    generateQuizzes(lectureId, payload)
+      .then(() => getQuizGenerateStatus(lectureId))
+      .then((res) => {
+        const quizList = res.quizzes || [];
+        setCurrentQuizSet(quizList);
+      })
+      .catch((err) => console.error("퀴즈 생성 실패:", err.message));
   };
 
   const handleStartClass = () => {
@@ -114,6 +199,7 @@ function TeacherSetupPage() {
         pdfFileName,
         pdfTotal,
         currentQuizSet,
+        lectureId,           // 이후 PDF 업로드·퀴즈 생성에 사용
       },
     });
   };
@@ -241,12 +327,18 @@ function TeacherSetupPage() {
               </div>
             )}
 
+            {pdfUploadError && (
+              <p style={{ marginTop: "8px", fontSize: "12px", color: "var(--danger)", textAlign: "center" }}>
+                ⚠ {pdfUploadError}
+              </p>
+            )}
+
             <hr className="hr-soft" />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ fontSize: "12px", color: "var(--zinc-500)", lineHeight: "1.6" }}>
                 강의자료 페이지 변경은<br/>학생 화면에 실시간 연동됩니다.
               </div>
-              <button className="btn btn-primary btn-lg" type="button" disabled={!pdfFileName} onClick={handleStartClass}>
+              <button className="btn btn-primary btn-lg" type="button" disabled={!pdfFileName || !pdfReady} onClick={handleStartClass}>
                 <Play size={16} />
                 수업 시작하기
               </button>
