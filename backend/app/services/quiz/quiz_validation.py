@@ -15,6 +15,7 @@ from app.constants.quiz_validation_constants import (
     SENTENCE_LIKE_ANSWER_MARKERS,
     SUPPORTED_DIFFICULTIES,
     SUPPORTED_GENERATED_QUIZ_TYPES,
+    SUPPORTED_QUIZ_SET_STATUSES,
     SUPPORTED_QUIZ_STATUSES,
     SUPPORTED_QUIZ_TYPES,
 )
@@ -241,6 +242,10 @@ def normalize_quiz_status(status_value: str) -> str:
     return normalize_text(status_value).upper()
 
 
+def normalize_quiz_set_status(status_value: str) -> str:
+    return normalize_text(status_value).upper()
+
+
 def normalize_difficulty(difficulty: str) -> str:
     return normalize_text(difficulty).upper()
 
@@ -279,6 +284,15 @@ def validate_quiz_status(status_value: str) -> Optional[JSONResponse]:
         return error_response(
             status.HTTP_400_BAD_REQUEST,
             "지원하지 않는 status입니다. DRAFT, READY, DELETED 중 하나를 사용하세요.",
+        )
+    return None
+
+
+def validate_quiz_set_status(status_value: str) -> Optional[JSONResponse]:
+    if normalize_quiz_set_status(status_value) not in SUPPORTED_QUIZ_SET_STATUSES:
+        return error_response(
+            status.HTTP_400_BAD_REQUEST,
+            "지원하지 않는 quiz set status입니다. DRAFT, SENT, CLOSED 중 하나를 사용하세요.",
         )
     return None
 
