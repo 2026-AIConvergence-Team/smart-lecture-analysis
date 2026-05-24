@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { CloudUpload, ChevronLeft, Play, Trash2 } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import { keywordsFor, quizFromKeyword, SAMPLE_QUESTIONS } from "../../data/quizSyncMock.js";
+import { setPdfCache, clearSession } from "../../data/sessionCache.js";
 
 const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -12,6 +13,16 @@ function genCode() {
     code += CHARS.charAt(Math.floor(Math.random() * CHARS.length));
   }
   return code;
+}
+
+function estimatePdfPages(data) {
+  try {
+    const text = new TextDecoder("latin1").decode(data);
+    const matches = text.match(/\/Type\s*\/Page\b/g);
+    return matches?.length || 0;
+  } catch {
+    return 0;
+  }
 }
 
 function TeacherSetupPage() {
@@ -26,6 +37,7 @@ function TeacherSetupPage() {
   const [joinCount, setJoinCount] = useState(0);
   const [pdfFileName, setPdfFileName] = useState(null);
   const [pdfMeta, setPdfMeta] = useState(null);
+  const [pdfReady, setPdfReady] = useState(false);
   const [pdfPage, setPdfPage] = useState(1);
   const [pdfTotal, setPdfTotal] = useState(8);
   const [rangeStart, setRangeStart] = useState(1);
@@ -57,8 +69,16 @@ function TeacherSetupPage() {
     }
     setPdfFileName(file.name);
     setPdfMeta({ size: file.size, type: file.type });
-    setPdfTotal(12);
     setPdfPage(1);
+    // Read binary and cache so TeacherLivePage can access it without re-reading
+    setPdfReady(false);
+    file.arrayBuffer().then((buf) => {
+      const pdfBytes = new Uint8Array(buf);
+      const total = estimatePdfPages(pdfBytes) || 12;
+      setPdfTotal(total);
+      setPdfCache(pdfBytes, file.name, total);
+      setPdfReady(true);
+    });
   };
 
   const handleDragOver = (e) => {
@@ -78,9 +98,11 @@ function TeacherSetupPage() {
   const handlePdfDelete = () => {
     setPdfFileName(null);
     setPdfMeta(null);
+    setPdfReady(false);
     setCurrentQuizSet([]);
     setExtractedKeywords([]);
     setSelectedKeywords([]);
+    clearSession();
   };
 
   const handleExtractKeywords = () => {
@@ -246,7 +268,7 @@ function TeacherSetupPage() {
               <div style={{ fontSize: "12px", color: "var(--zinc-500)", lineHeight: "1.6" }}>
                 강의자료 페이지 변경은<br/>학생 화면에 실시간 연동됩니다.
               </div>
-              <button className="btn btn-primary btn-lg" type="button" disabled={!pdfFileName} onClick={handleStartClass}>
+              <button className="btn btn-primary btn-lg" type="button" disabled={!pdfFileName || !pdfReady} onClick={handleStartClass}>
                 <Play size={16} />
                 수업 시작하기
               </button>

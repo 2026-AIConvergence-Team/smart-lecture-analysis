@@ -18,6 +18,7 @@ const STATUS_PILL = {
 
 function CodeJoinModal({ open, course, onClose, onJoin }) {
   const [code, setCode] = useState(["", "", "", "", "", ""]);
+  const [error, setError] = useState("");
 
   const handleInput = (i, val) => {
     const upper = val.toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -25,6 +26,7 @@ function CodeJoinModal({ open, course, onClose, onJoin }) {
     if (upper) {
       next[i] = upper[0];
       setCode(next);
+      setError("");
       const nextEl = document.getElementById(`codeInput${i + 1}`);
       if (nextEl) nextEl.focus();
     } else {
@@ -44,17 +46,61 @@ function CodeJoinModal({ open, course, onClose, onJoin }) {
     }
   };
 
+  const handleClose = () => {
+    setCode(["", "", "", "", "", ""]);
+    setError("");
+    onClose();
+  };
+
   const fullCode = code.join("");
 
   return (
-    <div className={`modal-backdrop${open ? " open" : ""}`} id="codeJoinModal" onClick={(e) => e.target.id === "codeJoinModal" && onClose()}>
-      <div className="modal">
-        <div className="modal-head">
-          <h3>수업 코드 입력</h3>
-          <p>교수님이 화면에 띄운 6자리 코드를 입력하세요.</p>
+    <div
+      className={`modal-backdrop${open ? " open" : ""}`}
+      id="codeJoinModal"
+      onClick={(e) => e.target.id === "codeJoinModal" && handleClose()}
+    >
+      <div className="modal" style={{ position: "relative", maxWidth: 480 }}>
+        {/* Close button */}
+        <button
+          className="modal-close"
+          type="button"
+          onClick={handleClose}
+          style={{
+            position: "absolute", top: 16, right: 16,
+            background: "none", border: "none", cursor: "pointer",
+            color: "var(--zinc-400)", padding: 4, borderRadius: 6,
+            display: "grid", placeItems: "center",
+          }}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+
+        {/* Header */}
+        <div className="modal-head" style={{ textAlign: "center", paddingBottom: 6 }}>
+          <div style={{
+            width: 54, height: 54, margin: "0 auto 12px",
+            borderRadius: 14, background: "var(--brand-soft)",
+            display: "grid", placeItems: "center",
+          }}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--brand)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="7.5" cy="15.5" r="5.5"/>
+              <path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>
+            </svg>
+          </div>
+          <h3 style={{ fontSize: 18, fontWeight: 700, color: "var(--zinc-900)", margin: 0 }}>
+            {course?.title || "강의"} 강의실 입장
+          </h3>
+          <p style={{ marginTop: 6, fontSize: 13, color: "var(--zinc-500)" }}>
+            교수님이 띄운 6자리 수업 코드를 입력하세요
+          </p>
         </div>
+
+        {/* Code inputs */}
         <div className="modal-body">
-          <div className="code-entry">
+          <div className="code-entry" id="cjCodeEntry">
             {code.map((v, i) => (
               <input
                 key={i}
@@ -62,15 +108,33 @@ function CodeJoinModal({ open, course, onClose, onJoin }) {
                 type="text"
                 maxLength={1}
                 value={v}
+                autoFocus={i === 0 && open}
                 onChange={(e) => handleInput(i, e.target.value)}
                 onKeyDown={(e) => handleKeyDown(i, e)}
               />
             ))}
           </div>
+          <p style={{
+            marginTop: 14, fontSize: 12,
+            color: "var(--danger)", textAlign: "center", minHeight: 14,
+          }}>
+            {error}
+          </p>
         </div>
+
+        {/* Footer */}
         <div className="modal-foot">
-          <button className="btn btn-ghost" type="button" onClick={() => { setCode(["","","","","",""]); onClose(); }}>취소</button>
-          <button className="btn btn-primary" type="button" disabled={fullCode.length < 6} onClick={() => { onJoin(fullCode); setCode(["","","","","",""]); }}>
+          <button className="btn btn-ghost" type="button" onClick={handleClose}>취소</button>
+          <button
+            className="btn btn-primary"
+            type="button"
+            disabled={fullCode.length < 6}
+            onClick={() => { onJoin(fullCode); setCode(["", "", "", "", "", ""]); setError(""); }}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+              <polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
+            </svg>
             입장하기
           </button>
         </div>
