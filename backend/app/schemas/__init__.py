@@ -29,6 +29,7 @@ from app.schemas.quiz import (
     QuizGenerateStatusResponse,
     QuizItemResponse,
     QuizListResponse,
+    QuizMutationResponse,
     QuizRegenerateRequest,
     QuizSetResponse,
     QuizSetWithQuizzesResponse,
@@ -42,8 +43,9 @@ from app.schemas.submission import (
     SubmissionResponse,
     SubmissionAnswerResponse,
     AnswerItem,
+    QuizSetSubmissionCreate,
 )
-from app.schemas.memo import MemoCreate, MemoResponse
+from app.schemas.memo import MemoCreate, MemoResponse, MemoUpdate
 from app.schemas.anonymous_question import (
     AnonymousQuestionCreate,
     AnonymousQuestionResponse,
@@ -79,6 +81,7 @@ __all__ = [
     "QuizGenerateStatusResponse",
     "QuizItemResponse",
     "QuizListResponse",
+    "QuizMutationResponse",
     "QuizRegenerateRequest",
     "QuizUpdateRequest",
     "ManualQuizCreateRequest",
@@ -87,10 +90,12 @@ __all__ = [
     "QuizSetResponse",
     "QuizSetWithQuizzesResponse",
     "SubmissionCreate",
+    "QuizSetSubmissionCreate",
     "SubmissionResponse",
     "SubmissionAnswerResponse",
     "AnswerItem",
     "MemoCreate",
+    "MemoUpdate",
     "MemoResponse",
     "AnonymousQuestionCreate",
     "AnonymousQuestionResponse",
