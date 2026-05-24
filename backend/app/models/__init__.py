@@ -7,6 +7,10 @@ from app.models.quiz import Quiz
 from app.models.quiz_generation_job import QuizGenerationJob
 from app.models.quiz_set import QuizSet
 from app.models.user import User
+from app.models.submission import Submission
+from app.models.submission_answer import SubmissionAnswer
+from app.models.memo import Memo
+from app.models.anonymous_question import AnonymousQuestion
 
 __all__ = [
     "User",
@@ -18,4 +22,8 @@ __all__ = [
     "Quiz",
     "QuizGenerationJob",
     "QuizSet",
+    "Submission",
+    "SubmissionAnswer",
+    "Memo",
+    "AnonymousQuestion",
 ]

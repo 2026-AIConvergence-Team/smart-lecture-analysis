@@ -38,6 +38,17 @@ from app.schemas.quiz import (
     QuizUpdateRequest,
 )
 from app.schemas.user import UserResponse
+from app.schemas.submission import (
+    SubmissionCreate,
+    SubmissionResponse,
+    SubmissionAnswerResponse,
+    AnswerItem,
+)
+from app.schemas.memo import MemoCreate, MemoResponse
+from app.schemas.anonymous_question import (
+    AnonymousQuestionCreate,
+    AnonymousQuestionResponse,
+)
 
 __all__ = [
     "UserRole",
@@ -77,4 +88,12 @@ __all__ = [
     "QuizSetStatusUpdateRequest",
     "QuizSetResponse",
     "QuizSetWithQuizzesResponse",
+    "SubmissionCreate",
+    "SubmissionResponse",
+    "SubmissionAnswerResponse",
+    "AnswerItem",
+    "MemoCreate",
+    "MemoResponse",
+    "AnonymousQuestionCreate",
+    "AnonymousQuestionResponse",
 ]
