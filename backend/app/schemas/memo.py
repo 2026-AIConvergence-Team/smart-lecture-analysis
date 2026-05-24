@@ -4,8 +4,10 @@ from pydantic import BaseModel, ConfigDict
 
 
 class MemoCreate(BaseModel):
-    quiz_id: int
-    student_id: int
+    content: str
+
+
+class MemoUpdate(BaseModel):
     content: str
 
 

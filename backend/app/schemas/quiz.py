@@ -70,6 +70,13 @@ class QuizItemResponse(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class QuizMutationResponse(QuizItemResponse):
+    message: str
+    updated_fields: List[str] = Field(default_factory=list)
+    ai_used: Optional[bool] = None
+    rejected_count: Optional[int] = None
+
+
 class QuizGenerateStatusResponse(BaseModel):
     lecture_id: int
     job_id: int
