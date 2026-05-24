@@ -10,6 +10,7 @@ import secrets
 from app.db.session import get_db
 from app.core.deps import get_current_user
 from app.repositories import (
+    anonymous_question_repository,
     concept_repository,
     course_repository,
     lecture_participant_repository,
@@ -71,6 +72,26 @@ def generate_unique_class_code(db: Session) -> str:
             return class_code
 
     raise RuntimeError("Failed to generate unique class code.")
+
+
+def question_to_response(
+    question: models.AnonymousQuestion,
+    author: models.User | None,
+    current_user: models.User,
+) -> dict:
+    is_mine = question.user_id == current_user.id
+
+    return {
+        "id": question.id,
+        "lecture_id": question.lecture_id,
+        "content": question.content,
+        "is_mine": is_mine,
+        "author_id": author.id if is_mine and author else None,
+        "author_name": author.name if is_mine and author else None,
+        "author_role": author.role if is_mine and author else None,
+        "author_display_name": author.name if is_mine and author else "익명",
+        "created_at": question.created_at,
+    }
 
 
 # 1. POST /api/lectures
@@ -247,6 +268,72 @@ def join_lecture(
         "class_code": lecture.class_code,
         "already_joined": already_joined,
     }
+
+
+@router.post(
+    "/{lecture_id}/questions",
+    response_model=schemas.AnonymousQuestionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create anonymous lecture question",
+)
+def create_lecture_question(
+    lecture_id: int,
+    request_data: schemas.AnonymousQuestionCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    if error_response:
+        return error_response
+
+    content = request_data.content.strip()
+    if not content:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "content is required."},
+        )
+
+    try:
+        question = anonymous_question_repository.create_question(
+            db=db,
+            lecture_id=lecture.id,
+            user_id=current_user.id,
+            content=content,
+        )
+    except Exception as e:
+        anonymous_question_repository.rollback(db)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": f"Failed to create question: {str(e)}"},
+        )
+
+    return question_to_response(question, current_user, current_user)
+
+
+@router.get(
+    "/{lecture_id}/questions",
+    response_model=list[schemas.AnonymousQuestionResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List anonymous lecture questions",
+)
+def list_lecture_questions(
+    lecture_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    if error_response:
+        return error_response
+
+    question_rows = anonymous_question_repository.get_questions_by_lecture(
+        db,
+        lecture.id,
+    )
+
+    return [
+        question_to_response(question, author, current_user)
+        for question, author in question_rows
+    ]
 
     
 # 2. POST /api/lectures/{lecture_id}/pdf

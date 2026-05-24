@@ -15,6 +15,10 @@ class SubmissionCreate(BaseModel):
     answers: List[AnswerItem]
 
 
+class QuizSetSubmissionCreate(BaseModel):
+    answers: List[AnswerItem]
+
+
 class SubmissionAnswerResponse(BaseModel):
     id: int
     submission_id: int
@@ -28,8 +32,11 @@ class SubmissionAnswerResponse(BaseModel):
 class SubmissionResponse(BaseModel):
     id: int
     set_id: int
+    lecture_id: int | None = None
     student_id: int
     submitted_at: datetime
     answers: List[SubmissionAnswerResponse] = []
+    total_count: int = 0
+    correct_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
