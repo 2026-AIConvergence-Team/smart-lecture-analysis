@@ -1,16 +1,18 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Briefcase, GraduationCap, UserPlus } from "lucide-react";
+import { signup } from "../api/authApi.js";
 
 function SignupPage() {
   const navigate = useNavigate();
-  const [role, setRole] = useState("professor");
-  const [form, setForm] = useState({ name: "", dept: "", id: "", password: "", confirm: "" });
+  const [role, setRole] = useState("teacher");
+  const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "" });
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
-    if (!form.name || !form.id || !form.password || !form.confirm) {
+    if (!form.name || !form.email || !form.password || !form.confirm) {
       setMessage("모든 입력란을 채워 주세요.");
       return;
     }
@@ -18,12 +20,26 @@ function SignupPage() {
       setMessage("비밀번호가 일치하지 않습니다.");
       return;
     }
-    if (form.password.length < 8) {
-      setMessage("비밀번호는 8자 이상이어야 합니다.");
+    if (form.password.length < 6) {
+      setMessage("비밀번호는 6자 이상이어야 합니다.");
       return;
     }
+
     setMessage("");
-    navigate("/login");
+    setLoading(true);
+    try {
+      await signup({
+        email: form.email,
+        name: form.name,
+        role: role,           // "teacher" | "student"
+        password: form.password,
+      });
+      navigate("/login");
+    } catch (err) {
+      setMessage(err.message || "회원가입에 실패했습니다. 다시 시도해 주세요.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -51,14 +67,15 @@ function SignupPage() {
               </div>
             </div>
             <h2 style={{ marginTop: 14 }}>QuizSync 계정 만들기</h2>
-            <p className="h2-sub">역할을 선택한 뒤 학번/사번과 비밀번호를 입력해 주세요</p>
+            <p className="h2-sub">역할을 선택한 뒤 정보를 입력해 주세요</p>
           </div>
 
+          {/* 역할 선택 */}
           <div className="role-tabs" style={{ marginTop: 24 }}>
             <button
               type="button"
-              className={`role-tab ${role === "professor" ? "active" : ""}`}
-              onClick={() => setRole("professor")}
+              className={`role-tab ${role === "teacher" ? "active" : ""}`}
+              onClick={() => setRole("teacher")}
             >
               <Briefcase size={14} /> 교수자
             </button>
@@ -72,7 +89,7 @@ function SignupPage() {
           </div>
 
           <div className="login-form-grid" style={{ marginTop: 18 }}>
-            <div className="field">
+            <div className="field full">
               <label htmlFor="suName">이름</label>
               <input
                 id="suName"
@@ -80,41 +97,29 @@ function SignupPage() {
                 placeholder="이름을 입력하세요"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="suDept">소속 학과</label>
-              <input
-                id="suDept"
-                type="text"
-                placeholder="예: 컴퓨터공학과"
-                value={form.dept}
-                onChange={(e) => setForm({ ...form, dept: e.target.value })}
+                disabled={loading}
               />
             </div>
             <div className="field full">
-              <label htmlFor="suId" id="suIdLabel">
-                {role === "student" ? "학번" : "사번 / 이메일"}
-              </label>
+              <label htmlFor="suEmail">이메일</label>
               <input
-                id="suId"
-                type="text"
-                placeholder={role === "student" ? "예: 20231349" : "예: prof@sungshin.ac.kr"}
-                value={form.id}
-                onChange={(e) => setForm({ ...form, id: e.target.value })}
+                id="suEmail"
+                type="email"
+                placeholder={role === "student" ? "예: 20231349@sungshin.ac.kr" : "예: prof@sungshin.ac.kr"}
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                disabled={loading}
               />
-              <p id="suIdHelp" style={{ margin: "6px 0 0", fontSize: 11, color: "var(--zinc-500)" }}>
-                {role === "student" ? "학생은 8자리 학번을 사용합니다." : "교수자는 사번 또는 이메일을 사용합니다."}
-              </p>
             </div>
             <div className="field">
               <label htmlFor="suPw">비밀번호</label>
               <input
                 id="suPw"
                 type="password"
-                placeholder="8자 이상"
+                placeholder="6자 이상"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
+                disabled={loading}
               />
             </div>
             <div className="field">
@@ -125,6 +130,7 @@ function SignupPage() {
                 placeholder="다시 한 번 입력"
                 value={form.confirm}
                 onChange={(e) => setForm({ ...form, confirm: e.target.value })}
+                disabled={loading}
               />
             </div>
           </div>
@@ -133,8 +139,15 @@ function SignupPage() {
             <p style={{ marginTop: 10, fontSize: 12, color: "var(--danger)", textAlign: "center" }}>{message}</p>
           )}
 
-          <button className="login-submit" type="button" style={{ marginTop: 24 }} onClick={handleSubmit}>
-            <UserPlus size={16} /> 회원가입
+          <button
+            className="login-submit"
+            type="button"
+            style={{ marginTop: 24, opacity: loading ? 0.7 : 1 }}
+            onClick={handleSubmit}
+            disabled={loading}
+          >
+            <UserPlus size={16} />
+            {loading ? "가입 중..." : "회원가입"}
           </button>
 
           <p style={{ marginTop: 20, textAlign: "center", fontSize: 13, color: "var(--zinc-500)" }}>

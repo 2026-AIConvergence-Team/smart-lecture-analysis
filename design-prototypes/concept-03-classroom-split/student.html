@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Classroom Split - Student</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="bar">
+    <div><b>Concept 03 · classroom-split</b><span>학생 화면 시안</span></div>
+    <nav><a href="#enter">입장</a><a href="#quiz">퀴즈</a><a href="#question">질문</a><a href="#review">복습</a></nav>
+  </header>
+  <main>
+    <section class="screen entry" id="enter">
+      <div class="screen-title">classroom-split · 학생 1. 수업 코드 입장 화면</div>
+      <div class="join">
+        <h1>강의실 입장</h1>
+        <p>공유받은 수업 코드로 현재 진행 중인 퀴즈 세션에 참여합니다.</p>
+        <div class="code">A4Q8K2</div>
+        <button>입장</button>
+      </div>
+    </section>
+
+    <section class="screen" id="quiz">
+      <div class="screen-title">classroom-split · 학생 2. 강의자료 + 퀴즈 풀이 화면</div>
+      <div class="class-split">
+        <article class="lecture-pane">
+          <div class="pane-head">왼쪽 · 강의자료 <span>12 / 36</span></div>
+          <div class="page">
+            <h2>가상 메모리</h2>
+            <p>실제 메모리보다 큰 논리 주소 공간을 제공하며, 필요한 페이지만 물리 메모리에 올립니다.</p>
+            <div class="callout">핵심: 페이지 폴트는 요청 페이지가 메모리에 없을 때 발생합니다.</div>
+          </div>
+        </article>
+        <aside class="quiz-pane">
+          <div class="pane-head">오른쪽 · 퀴즈</div>
+          <p class="step">2 / 3</p>
+          <h2>페이지 폴트가 발생하는 조건은?</h2>
+          <label class="answer on">요청한 페이지가 물리 메모리에 없을 때</label>
+          <label class="answer">TLB에 모든 주소가 저장될 때</label>
+          <label class="answer">프로세스가 I/O를 마칠 때</label>
+          <button>제출</button>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" id="question">
+      <div class="screen-title">classroom-split · 학생 3. 익명 질문 작성 화면</div>
+      <div class="class-split slim">
+        <article class="lecture-pane">
+          <div class="pane-head">참조 중인 페이지</div>
+          <div class="page small"><h2>TLB</h2><p>주소 변환 결과를 저장하는 고속 캐시입니다.</p></div>
+        </article>
+        <aside class="quiz-pane">
+          <div class="pane-head">익명 질문</div>
+          <textarea>TLB 미스와 페이지 폴트는 동시에 발생할 수 있나요?</textarea>
+          <button>익명으로 보내기</button>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" id="review">
+      <div class="screen-title">classroom-split · 학생 4. 수업 후 내 오답/퀴즈 복습 화면</div>
+      <div class="review-split">
+        <div class="summary"><h2>내 복습 요약</h2><strong>72%</strong><p>3개 문항을 다시 확인하세요.</p></div>
+        <div class="review-list">
+          <article><b>오답</b><h3>TLB의 역할</h3><p>주소 변환 결과를 캐싱해 접근 시간을 줄입니다.</p></article>
+          <article><b>정답</b><h3>페이지 폴트 조건</h3><p>요청 페이지가 메모리에 없을 때 발생합니다.</p></article>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

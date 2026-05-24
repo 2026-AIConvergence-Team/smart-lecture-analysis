@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Classroom Split - Teacher</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="bar">
+    <div><b>Concept 03 · classroom-split</b><span>교수자 화면 시안</span></div>
+    <nav><a href="#create">생성</a><a href="#range">범위</a><a href="#edit">퀴즈</a><a href="#live">라이브</a><a href="#questions">질문</a><a href="#report">리포트</a></nav>
+  </header>
+  <main>
+    <section class="screen" id="create">
+      <div class="screen-title">classroom-split · 교수 1. 강의 생성/PDF 업로드 화면</div>
+      <div class="teacher-grid">
+        <div class="box"><h2>강의 생성</h2><label>강의명<input value="운영체제 5주차"></label><label>수업 코드<input value="A4Q8K2"></label><button>생성</button></div>
+        <div class="box upload"><span>PDF</span><h3>OS_week05_virtual_memory.pdf</h3><p>36 pages · 분석 준비 완료</p></div>
+      </div>
+    </section>
+
+    <section class="screen" id="range">
+      <div class="screen-title">classroom-split · 교수 2. 페이지 범위 선택 및 퀴즈 생성 화면</div>
+      <div class="class-split">
+        <article class="lecture-pane">
+          <div class="pane-head">PDF 미리보기</div>
+          <div class="page"><h2>10-18 페이지 선택</h2><p>가상 메모리, 페이지 폴트, TLB, LRU 구간</p></div>
+        </article>
+        <aside class="quiz-pane">
+          <div class="pane-head">생성 설정</div>
+          <label>시작<input value="10"></label><label>끝<input value="18"></label>
+          <button>핵심 개념/퀴즈 생성</button>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" id="edit">
+      <div class="screen-title">classroom-split · 교수 3. 생성된 퀴즈 확인/수정/삭제 화면</div>
+      <div class="quiz-editor">
+        <article><b>Q1</b><h3>페이지 폴트 조건은?</h3><p>난이도 중 · 배포 예정</p><button>수정</button><button class="ghost">삭제</button></article>
+        <article><b>Q2</b><h3>TLB가 성능을 높이는 방식은?</h3><p>난이도 상 · 검토 필요</p><button>수정</button><button class="ghost">삭제</button></article>
+        <article><b>Q3</b><h3>LRU 기준은?</h3><p>난이도 하 · 완료</p><button>수정</button><button class="ghost">삭제</button></article>
+      </div>
+    </section>
+
+    <section class="screen" id="live">
+      <div class="screen-title">classroom-split · 교수 4. 실시간 응답률/오답률 대시보드</div>
+      <div class="live-board">
+        <div class="metric"><span>응답률</span><strong>84%</strong><p>42 / 50명</p></div>
+        <div class="metric alert"><span>오답률</span><strong>37%</strong><p>Q2 설명 필요</p></div>
+        <div class="bars"><i style="height:44%"></i><i style="height:72%"></i><i style="height:28%"></i><i style="height:50%"></i></div>
+      </div>
+    </section>
+
+    <section class="screen" id="questions">
+      <div class="screen-title">classroom-split · 교수 5. 익명 질문 모아보기 화면</div>
+      <div class="question-wall">
+        <article><span>p.12</span><p>LRU와 FIFO를 예시로 비교해주세요.</p></article>
+        <article><span>p.15</span><p>TLB 미스와 페이지 폴트 차이는?</p></article>
+        <article><span>p.18</span><p>스래싱이 왜 성능을 크게 낮추나요?</p></article>
+      </div>
+    </section>
+
+    <section class="screen" id="report">
+      <div class="screen-title">classroom-split · 교수 6. 수업 리포트 화면</div>
+      <div class="report">
+        <div><span>평균 정답률</span><strong>68%</strong></div>
+        <div><span>참여 학생</span><strong>50</strong></div>
+        <div><span>질문 수</span><strong>14</strong></div>
+        <article><h3>다음 수업 추천</h3><p>TLB 캐싱 원리와 LRU/FIFO 비교 예제를 첫 10분에 복습합니다.</p></article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

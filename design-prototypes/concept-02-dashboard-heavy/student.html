@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard Heavy - Student</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside class="rail">
+    <h1>Concept 02</h1>
+    <a href="#enter">입장</a><a href="#quiz">퀴즈</a><a href="#question">질문</a><a href="#review">복습</a>
+  </aside>
+  <main>
+    <section class="screen" id="enter">
+      <div class="screen-title">dashboard-heavy · 학생 1. 수업 코드 입장 화면</div>
+      <div class="center-panel">
+        <p class="eyebrow">STUDENT ACCESS</p>
+        <h2>실시간 강의 참여</h2>
+        <div class="code-box">A4Q8K2</div>
+        <button>Join Class</button>
+      </div>
+    </section>
+
+    <section class="screen" id="quiz">
+      <div class="screen-title">dashboard-heavy · 학생 2. 강의자료 + 퀴즈 풀이 화면</div>
+      <div class="workbench">
+        <article class="panel pdf">
+          <div class="panel-head"><b>Lecture PDF</b><span>12 / 36</span></div>
+          <div class="document">
+            <h3>Virtual Memory</h3>
+            <p>Logical address spaces are mapped to physical frames by page tables. Page faults trigger disk access and replacement policy decisions.</p>
+            <div class="note">Highlighted: TLB hit ratio directly affects memory access time.</div>
+          </div>
+        </article>
+        <aside class="panel">
+          <div class="meter"><span style="width:72%"></span></div>
+          <p class="eyebrow">LIVE QUIZ</p>
+          <h3>Which cache accelerates address translation?</h3>
+          <div class="option active">TLB</div>
+          <div class="option">Frame table</div>
+          <div class="option">Swap area</div>
+          <div class="option">Kernel stack</div>
+          <button>Submit Answer</button>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" id="question">
+      <div class="screen-title">dashboard-heavy · 학생 3. 익명 질문 작성 화면</div>
+      <div class="two-col">
+        <div class="panel">
+          <p class="eyebrow">ANONYMOUS</p>
+          <h2>질문 작성</h2>
+          <textarea>TLB hit ratio가 낮아지면 실제 접근 시간 계산식이 어떻게 달라지나요?</textarea>
+          <button>Send</button>
+        </div>
+        <div class="metric-board">
+          <div><span>현재 질문</span><strong>14</strong></div>
+          <div><span>내 상태</span><strong>대기</strong></div>
+          <div><span>연결</span><strong>LIVE</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" id="review">
+      <div class="screen-title">dashboard-heavy · 학생 4. 수업 후 내 오답/퀴즈 복습 화면</div>
+      <div class="analytics">
+        <div class="panel score"><span>정답률</span><strong>72%</strong><small>상위 42%</small></div>
+        <div class="panel score"><span>소요 시간</span><strong>8m</strong><small>평균 9m</small></div>
+        <div class="panel list">
+          <h3>Review Queue</h3>
+          <p><b>오답</b> TLB의 역할 · 주소 변환 캐시</p>
+          <p><b>정답</b> 페이지 폴트 조건 · 페이지 부재</p>
+          <p><b>오답</b> LRU 기준 · 최근 사용 시점</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

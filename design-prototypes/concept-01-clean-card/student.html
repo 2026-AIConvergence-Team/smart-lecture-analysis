@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clean Card - Student</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Concept 01 · clean-card</p>
+      <h1>학생 화면 시안</h1>
+    </div>
+    <nav>
+      <a href="#enter">입장</a>
+      <a href="#quiz">퀴즈</a>
+      <a href="#question">질문</a>
+      <a href="#review">복습</a>
+    </nav>
+  </header>
+
+  <main class="stack">
+    <section class="screen hero" id="enter">
+      <div class="screen-title">clean-card · 학생 1. 수업 코드 입장 화면</div>
+      <div class="entry-card">
+        <span class="pill">LIVE CLASS</span>
+        <h2>수업 코드를 입력하세요</h2>
+        <p>교수자가 공유한 6자리 코드를 입력하면 강의자료와 퀴즈가 함께 열립니다.</p>
+        <div class="code-input">
+          <span>A</span><span>4</span><span>Q</span><span>8</span><span>K</span><span>2</span>
+        </div>
+        <button>수업 입장하기</button>
+      </div>
+    </section>
+
+    <section class="screen" id="quiz">
+      <div class="screen-title">clean-card · 학생 2. 강의자료 + 퀴즈 풀이 화면</div>
+      <div class="split">
+        <article class="material card">
+          <div class="toolbar">
+            <strong>운영체제 5주차.pdf</strong>
+            <span>12 / 36 page</span>
+          </div>
+          <div class="pdf-page">
+            <h3>가상 메모리 핵심 개념</h3>
+            <p>프로세스는 논리 주소 공간을 사용하고, 운영체제는 페이지 테이블을 통해 물리 메모리와 매핑합니다.</p>
+            <ul>
+              <li>페이지 폴트 발생 시 보조기억장치에서 페이지를 적재</li>
+              <li>LRU, FIFO 등 교체 알고리즘으로 프레임 관리</li>
+              <li>TLB는 주소 변환 속도를 높이는 캐시 역할</li>
+            </ul>
+          </div>
+        </article>
+        <aside class="quiz card">
+          <div class="progress"><span style="width:66%"></span></div>
+          <p class="eyebrow">Quiz 2 / 3</p>
+          <h3>페이지 폴트가 발생하는 상황은?</h3>
+          <label class="choice selected">요청한 페이지가 메모리에 없을 때</label>
+          <label class="choice">CPU 레지스터가 비어 있을 때</label>
+          <label class="choice">프로세스가 종료될 때</label>
+          <label class="choice">캐시 메모리가 가득 찰 때</label>
+          <button>답안 제출</button>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" id="question">
+      <div class="screen-title">clean-card · 학생 3. 익명 질문 작성 화면</div>
+      <div class="question-layout">
+        <div class="card">
+          <p class="eyebrow">ANONYMOUS QUESTION</p>
+          <h2>익명 질문 남기기</h2>
+          <textarea>페이지 교체 알고리즘에서 LRU와 FIFO의 차이가 아직 헷갈립니다.</textarea>
+          <div class="row">
+            <span class="tag">현재 페이지 12</span>
+            <span class="tag">익명 전송</span>
+          </div>
+          <button>질문 보내기</button>
+        </div>
+        <div class="card soft">
+          <h3>내가 남긴 질문</h3>
+          <p>익명으로 교수자 화면에 표시됩니다. 다른 학생에게는 이름이 보이지 않습니다.</p>
+          <div class="mini-list">방금 전송됨 · 답변 대기</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" id="review">
+      <div class="screen-title">clean-card · 학생 4. 수업 후 내 오답/퀴즈 복습 화면</div>
+      <div class="review-grid">
+        <article class="card stat">
+          <span>내 정답률</span>
+          <strong>72%</strong>
+          <small>전체 평균 68%</small>
+        </article>
+        <article class="card stat">
+          <span>오답 문항</span>
+          <strong>3개</strong>
+          <small>개념 복습 추천</small>
+        </article>
+        <article class="card wide">
+          <h3>오답 복습</h3>
+          <div class="review-item wrong">
+            <b>Q. TLB의 역할은?</b>
+            <p>내 답: 페이지 교체 수행 · 정답: 주소 변환 결과 캐싱</p>
+          </div>
+          <div class="review-item">
+            <b>Q. 페이지 폴트 발생 조건은?</b>
+            <p>정답 · 요청 페이지가 메모리에 없을 때</p>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
