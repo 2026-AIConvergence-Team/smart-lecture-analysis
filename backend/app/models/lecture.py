@@ -36,3 +36,4 @@ class Lecture(Base):
         back_populates="lecture",
         cascade="all, delete-orphan",
     )
+

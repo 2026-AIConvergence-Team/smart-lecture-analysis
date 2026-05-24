@@ -3,9 +3,11 @@ from app.schemas.course import (
     CourseCreate,
     CourseResponse,
     CourseUpdate,
+    CourseWithLecturesResponse,
 )
 from app.schemas.lecture import (
     ConceptDetail,
+    CourseLectureCreate,
     LectureAnalyzeRequest,
     LectureAnalyzeResponse,
     LectureCodeResponse,
@@ -46,6 +48,8 @@ __all__ = [
     "CourseCreate",
     "CourseUpdate",
     "CourseResponse",
+    "CourseWithLecturesResponse",
+    "CourseLectureCreate",
     "LectureCreate",
     "LectureResponse",
     "LectureStatusUpdateRequest",
