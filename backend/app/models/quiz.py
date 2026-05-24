@@ -24,7 +24,25 @@ class Quiz(Base):
         index=True,
     )
 
-    quiz_type = Column(String, nullable=False)  # BLANK | DEFINITION | KEYWORD_CHOICE | OX
+    # 어떤 퀴즈 생성 작업에서 만들어진 퀴즈인지 연결합니다.
+    # 이 컬럼이 있어야 generate/status에서 "최신 작업 결과만" 정확히 조회할 수 있습니다.
+    set_id = Column(
+        Integer,
+        ForeignKey("sets.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+
+    generation_job_id = Column(
+        Integer,
+        ForeignKey("quiz_generation_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # BLANK | DEFINITION | KEYWORD_CHOICE | OX
+    quiz_type = Column(String, nullable=False)
+
     question = Column(Text, nullable=False)
 
     # SQLite 호환을 위해 JSON 문자열로 저장합니다.
@@ -35,7 +53,7 @@ class Quiz(Base):
     explanation = Column(Text, nullable=True)
     source_sentence = Column(Text, nullable=True)
 
-    page_num = Column(Integer, nullable=False)
+    page_num = Column(Integer, nullable=False, index=True)
 
     # DRAFT | READY | DELETED
     status = Column(String, default="DRAFT", nullable=False, index=True)

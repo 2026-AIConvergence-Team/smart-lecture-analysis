@@ -4,10 +4,11 @@ import { useEffect } from "react";
 import LoginPage  from "./pages/LoginPage.jsx";
 import SignupPage from "./pages/SignupPage.jsx";
 
-import TeacherCoursesPage   from "./pages/teacher/TeacherCoursesPage.jsx";
-import TeacherSetupPage     from "./pages/teacher/TeacherSetupPage.jsx";
-import TeacherLivePage      from "./pages/teacher/TeacherLivePage.jsx";
-import TeacherReportPage    from "./pages/teacher/TeacherReportPage.jsx";
+import TeacherCoursesPage    from "./pages/teacher/TeacherCoursesPage.jsx";
+import TeacherWeekSelectPage from "./pages/teacher/TeacherWeekSelectPage.jsx";
+import TeacherSetupPage      from "./pages/teacher/TeacherSetupPage.jsx";
+import TeacherLivePage       from "./pages/teacher/TeacherLivePage.jsx";
+import TeacherReportPage     from "./pages/teacher/TeacherReportPage.jsx";
 
 import StudentCoursesPage   from "./pages/student/StudentCoursesPage.jsx";
 import StudentLivePage      from "./pages/student/StudentLivePage.jsx";
@@ -28,10 +29,11 @@ function App() {
       <Route path="/signup" element={<SignupPage />} />
 
       {/* 교수자 라우트 */}
-      <Route path="/teacher/courses"  element={<TeacherCoursesPage />} />
-      <Route path="/teacher/setup"    element={<TeacherSetupPage />} />
-      <Route path="/teacher/live"     element={<TeacherLivePage />} />
-      <Route path="/teacher/report"   element={<TeacherReportPage />} />
+      <Route path="/teacher/courses"      element={<TeacherCoursesPage />} />
+      <Route path="/teacher/week-select"  element={<TeacherWeekSelectPage />} />
+      <Route path="/teacher/setup"        element={<TeacherSetupPage />} />
+      <Route path="/teacher/live"         element={<TeacherLivePage />} />
+      <Route path="/teacher/report"       element={<TeacherReportPage />} />
 
       {/* 학생 라우트 */}
       <Route path="/student/courses"  element={<StudentCoursesPage />} />
