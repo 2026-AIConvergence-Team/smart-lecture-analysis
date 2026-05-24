@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TeacherWeekSelectPage – Wireframe</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Pretendard", "Apple SD Gothic Neo", sans-serif; background: #f4f5f7; color: #111827; font-size: 14px; }
+
+  /* ── Layout ── */
+  .layout { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 220px; background: #fff; border-right: 1px solid #e5e7eb;
+    padding: 24px 16px; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0;
+  }
+  .sidebar .logo {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 15px; font-weight: 800; color: #5B3D9F; margin-bottom: 20px; padding: 0 8px;
+  }
+  .sidebar .logo-icon {
+    width: 30px; height: 30px; border-radius: 8px; background: #5B3D9F;
+    display: grid; place-items: center;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px; border-radius: 9px; font-size: 13px;
+    font-weight: 500; color: #6b7280; cursor: pointer;
+  }
+  .nav-item.active { background: #ede9f8; color: #5B3D9F; font-weight: 700; }
+  .nav-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+
+  /* ── Content ── */
+  .main { flex: 1; padding: 36px 40px; }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #7c5cbf; }
+  .page-title { font-size: 22px; font-weight: 800; color: #111827; margin-top: 4px; }
+  .page-sub { font-size: 13px; color: #6b7280; margin-top: 4px; }
+
+  /* header row */
+  .header-row { display: flex; align-items: flex-start; justify-content: space-between; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 9px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid transparent; }
+  .btn-ghost { background: #fff; border-color: #e5e7eb; color: #374151; }
+  .btn-primary { background: #5B3D9F; color: #fff; }
+  .btn-primary:disabled { background: #c4b5f7; cursor: not-allowed; }
+  .btn-lg { padding: 10px 20px; font-size: 14px; }
+
+  /* course meta bar */
+  .course-meta-bar {
+    margin-top: 20px; padding: 14px 18px; background: #fff;
+    border-radius: 12px; border: 1px solid #e5e7eb;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .course-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: #ede9f8; color: #5B3D9F;
+    display: grid; place-items: center; font-size: 12px; font-weight: 800; flex-shrink: 0;
+  }
+  .course-name { font-size: 14px; font-weight: 700; color: #111827; }
+  .course-info { font-size: 12px; color: #6b7280; margin-top: 2px; }
+
+  /* section label */
+  .section-label { font-size: 13px; font-weight: 600; color: #374151; margin: 24px 0 12px; }
+
+  /* week grid */
+  .week-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .week-card {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+    padding: 14px 16px; border-radius: 12px; border: 1.5px solid #e5e7eb;
+    background: #fff; cursor: pointer; transition: all .15s;
+  }
+  .week-card:hover { border-color: #7c5cbf; background: #faf8ff; }
+  .week-card.selected { border: 2px solid #5B3D9F; background: #ede9f8; }
+  .week-card.done .week-num { color: #9ca3af; }
+  .week-num { font-size: 19px; font-weight: 800; color: #111827; line-height: 1; }
+  .week-badge-area { min-height: 22px; }
+
+  /* pill badges */
+  .pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+  .pill-neutral { background: #f3f4f6; color: #6b7280; }
+  .pill-brand   { background: #ede9f8; color: #5B3D9F; }
+
+  /* bottom action bar */
+  .action-bar {
+    margin-top: 24px; padding: 16px 20px;
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 14px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  }
+  .action-hint { font-size: 13px; color: #6b7280; }
+  .action-hint strong { color: #111827; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24" fill="none" width="16" height="16">
+          <path d="M12 2L19 6V14L12 18L5 14V6Z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>
+          <circle cx="12" cy="11" r="2.5" fill="#fff"/>
+          <path d="M14 13L17 16" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </div>
+      QuizSync
+    </div>
+    <div class="nav-item active"><span class="nav-dot"></span> 내 강의</div>
+    <div class="nav-item"><span class="nav-dot"></span> 리포트</div>
+    <div class="nav-item"><span class="nav-dot"></span> 설정</div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+
+    <!-- Header -->
+    <div class="header-row">
+      <div>
+        <p class="eyebrow">Week Selection</p>
+        <h1 class="page-title">자료구조론 · 주차 선택</h1>
+        <p class="page-sub">수업을 진행할 주차를 선택한 뒤 강의 설정을 시작하세요.</p>
+      </div>
+      <button class="btn btn-ghost">← 강의 목록</button>
+    </div>
+
+    <!-- Course meta -->
+    <div class="course-meta-bar">
+      <div class="course-icon">자료</div>
+      <div>
+        <div class="course-name">자료구조론 <span style="font-size:12px;font-weight:500;color:#6b7280;">01분반</span></div>
+        <div class="course-info">컴퓨터공학과 · 월/수 10:30 · 수강생 32명</div>
+      </div>
+    </div>
+
+    <!-- Week grid -->
+    <div class="section-label">전체 15주차</div>
+    <div class="week-grid">
+
+      <!-- 완료 주차 (1~4) -->
+      <div class="week-card done">
+        <div class="week-num">1주차</div>
+        <div class="week-badge-area"><span class="pill pill-neutral">완료</span></div>
+      </div>
+      <div class="week-card done">
+        <div class="week-num">2주차</div>
+        <div class="week-badge-area"><span class="pill pill-neutral">완료</span></div>
+      </div>
+      <div class="week-card done">
+        <div class="week-num">3주차</div>
+        <div class="week-badge-area"><span class="pill pill-neutral">완료</span></div>
+      </div>
+      <div class="week-card done">
+        <div class="week-num">4주차</div>
+        <div class="week-badge-area"><span class="pill pill-neutral">완료</span></div>
+      </div>
+
+      <!-- 진행 예정 (5주차) - selected state 예시 -->
+      <div class="week-card selected">
+        <div class="week-num" style="color:#5B3D9F;">5주차</div>
+        <div class="week-badge-area"><span class="pill pill-brand">진행 예정</span></div>
+      </div>
+
+      <!-- 예정 주차 (6~15) -->
+      <div class="week-card"><div class="week-num">6주차</div><div class="week-badge-area"></div></div>
+      <div class="week-card"><div class="week-num">7주차</div><div class="week-badge-area"></div></div>
+      <div class="week-card"><div class="week-num">8주차</div><div class="week-badge-area"></div></div>
+      <div class="week-card"><div class="week-num">9주차</div><div class="week-badge-area"></div></div>
+      <div class="week-card"><div class="week-num">10주차</div><div class="week-badge-area"></div></div>
+      <div class="week-card"><div class="week-num">11주차</div><div class="week-badge-area"></div></div>
+      <div class="week-card"><div class="week-num">12주차</div><div class="week-badge-area"></div></div>
+      <div class="week-card"><div class="week-num">13주차</div><div class="week-badge-area"></div></div>
+      <div class="week-card"><div class="week-num">14주차</div><div class="week-badge-area"></div></div>
+      <div class="week-card"><div class="week-num">15주차</div><div class="week-badge-area"></div></div>
+    </div>
+
+    <!-- Action bar -->
+    <div class="action-bar">
+      <div class="action-hint"><strong>5주차</strong>를 선택했습니다. 강의 설정 페이지로 이동합니다.</div>
+      <button class="btn btn-primary btn-lg">▶ 강의 설정 시작</button>
+    </div>
+
+  </main>
+</div>
+</body>
+</html>
