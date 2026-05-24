@@ -10,6 +10,7 @@ from app.db.session import get_db
 from app.core.deps import get_current_user
 from app.repositories import (
     concept_repository,
+    course_repository,
     lecture_repository,
     page_content_repository,
 )
@@ -21,6 +22,35 @@ import app.models as models
 import app.schemas as schemas
 
 router = APIRouter(prefix="/api/lectures", tags=["Lectures"])
+
+
+def get_visible_lecture(
+    db: Session,
+    lecture_id: int,
+    current_user: models.User,
+):
+    lecture = lecture_repository.get_lecture_by_id(db, lecture_id)
+    if not lecture:
+        return None, JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "Lecture not found."},
+        )
+
+    if current_user.role == "teacher":
+        if lecture.course_id is None:
+            return None, JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"error": "Lecture is not linked to a course."},
+            )
+
+        course = course_repository.get_course_by_id(db, lecture.course_id)
+        if not course or course.user_id != current_user.id:
+            return None, JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"error": "Lecture not found."},
+            )
+
+    return lecture, None
 
 
 # 1. POST /api/lectures
@@ -38,14 +68,29 @@ def create_lecture(
     if not request_data.title or not request_data.title.strip():
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "title은 필수값입니다."}
+            content={"error": "title is required."}
+        )
+
+    if current_user.role != "teacher":
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"error": "Only teachers can create lectures."}
+        )
+
+    course = course_repository.get_course_by_id(db, request_data.course_id)
+    if not course or course.user_id != current_user.id:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "Course not found."}
         )
 
     new_lecture = models.Lecture(
+        course_id=request_data.course_id,
         title=request_data.title.strip(),
         date=request_data.date,
         time=request_data.time,
         class_code=None,
+        status="ACTIVE",
         extract_status="pending",
         analyze_status="pending",
         total_pages=0
@@ -58,7 +103,7 @@ def create_lecture(
         lecture_repository.rollback(db)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": f"서버 내부 데이터베이스 오류: {str(e)}"}
+            content={"error": f"Database error: {str(e)}"}
         )
 
     
@@ -75,17 +120,14 @@ async def upload_lecture_pdf(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture = lecture_repository.get_lecture_by_id(db, lecture_id)
-    if not lecture:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "해당 강의를 찾을 수 없습니다."}
-        )
+    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    if error_response:
+        return error_response
 
     if not file.filename.lower().endswith('.pdf'):
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "PDF 파일만 업로드 가능합니다."}
+            content={"error": "Only PDF files can be uploaded."}
         )
 
     try:
@@ -112,7 +154,7 @@ async def upload_lecture_pdf(
         lecture_repository.rollback(db)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": f"서버에서 PDF 파일을 처리하는 중 오류가 발생했습니다: {str(e)}"}
+            content={"error": f"Failed to process PDF file: {str(e)}"}
         )
 
     
@@ -127,24 +169,21 @@ async def start_text_extraction(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture = lecture_repository.get_lecture_by_id(db, lecture_id)
-    if not lecture:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "해당 강의를 찾을 수 없습니다."}
-        )
+    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    if error_response:
+        return error_response
 
     if not lecture.file_name:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "텍스트를 추출할 PDF 파일이 업로드되지 않았습니다."}
+            content={"error": "PDF file is required before text extraction."}
         )
 
     file_path = f"uploads/lectures/{lecture_id}/{lecture.file_name}"
     if not os.path.exists(file_path):
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "서버에 저장된 PDF 파일을 물리적으로 찾을 수 없습니다."}
+            content={"error": "Stored PDF file was not found."}
         )
 
     try:
@@ -162,7 +201,7 @@ async def start_text_extraction(
     except Exception as e:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": f"텍스트 추출 중 서버 오류 발생: {str(e)}"}
+            content={"error": f"Failed to extract text: {str(e)}"}
         )
 
 
@@ -177,12 +216,9 @@ def extract_lecture_concepts(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture = lecture_repository.get_lecture_by_id(db, lecture_id)
-    if not lecture:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "해당 강의를 찾을 수 없습니다."}
-        )
+    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    if error_response:
+        return error_response
 
     page_contents = page_content_repository.get_page_contents_by_lecture(
         db,
@@ -192,7 +228,7 @@ def extract_lecture_concepts(
     if not page_contents:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "추출된 페이지 텍스트가 없습니다. 3단계를 먼저 진행해주세요."}
+            content={"error": "No extracted page text exists. Run text extraction first."}
         )
 
     try:
@@ -211,7 +247,7 @@ def extract_lecture_concepts(
     except Exception as e:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": f"알고리즘 내부 연산 중 서버 예외 발생: {str(e)}"}
+            content={"error": f"Failed to extract concepts: {str(e)}"}
         )
     
     
@@ -227,12 +263,37 @@ def get_lecture_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture = lecture_repository.get_lecture_by_id(db, lecture_id)
-    if not lecture:
+    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    if error_response:
+        return error_response
+    return lecture
+
+
+@router.patch(
+    "/{lecture_id}/status",
+    response_model=schemas.LectureResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update lecture session status",
+)
+def update_lecture_status(
+    lecture_id: int,
+    request_data: schemas.LectureStatusUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    if error_response:
+        return error_response
+
+    normalized_status = str(request_data.status or "").strip().upper()
+    if normalized_status not in {"ACTIVE", "ENDED"}:
         return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "해당 강의를 찾을 수 없습니다."}
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "status must be ACTIVE or ENDED."}
         )
+
+    lecture.status = normalized_status
+    lecture_repository.save_lecture(db, lecture)
     return lecture
 
 
@@ -247,12 +308,9 @@ def get_lecture_concepts(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture = lecture_repository.get_lecture_by_id(db, lecture_id)
-    if not lecture:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "해당 강의를 찾을 수 없습니다."}
-        )
+    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    if error_response:
+        return error_response
 
     concepts = concept_repository.get_concepts_by_lecture(db, lecture_id)
 

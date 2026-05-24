@@ -1,11 +1,19 @@
 from app.schemas.auth import Token, UserCreate, UserLogin, UserRole
+from app.schemas.course import (
+    CourseCreate,
+    CourseResponse,
+    CourseUpdate,
+    CourseWithLecturesResponse,
+)
 from app.schemas.lecture import (
     ConceptDetail,
+    CourseLectureCreate,
     LectureAnalyzeRequest,
     LectureAnalyzeResponse,
     LectureConceptsResponse,
     LectureCreate,
     LectureResponse,
+    LectureStatusUpdateRequest,
     PDFUploadResponse,
     PagePreview,
     TextExtractStartResponse,
@@ -13,12 +21,16 @@ from app.schemas.lecture import (
 )
 from app.schemas.quiz import (
     ManualQuizCreateRequest,
+    LectureQuizSetsWithQuizzesResponse,
     QuizGenerateRequest,
     QuizGenerateResponse,
     QuizGenerateStatusResponse,
     QuizItemResponse,
     QuizListResponse,
     QuizRegenerateRequest,
+    QuizSetResponse,
+    QuizSetWithQuizzesResponse,
+    QuizSetStatusUpdateRequest,
     QuizStatusUpdateRequest,
     QuizUpdateRequest,
 )
@@ -30,8 +42,14 @@ __all__ = [
     "UserLogin",
     "UserResponse",
     "Token",
+    "CourseCreate",
+    "CourseUpdate",
+    "CourseResponse",
+    "CourseWithLecturesResponse",
+    "CourseLectureCreate",
     "LectureCreate",
     "LectureResponse",
+    "LectureStatusUpdateRequest",
     "PDFUploadResponse",
     "TextExtractStartResponse",
     "PagePreview",
@@ -40,6 +58,7 @@ __all__ = [
     "LectureAnalyzeResponse",
     "ConceptDetail",
     "LectureConceptsResponse",
+    "LectureQuizSetsWithQuizzesResponse",
     "QuizGenerateRequest",
     "QuizGenerateResponse",
     "QuizGenerateStatusResponse",
@@ -49,4 +68,7 @@ __all__ = [
     "QuizUpdateRequest",
     "ManualQuizCreateRequest",
     "QuizStatusUpdateRequest",
+    "QuizSetStatusUpdateRequest",
+    "QuizSetResponse",
+    "QuizSetWithQuizzesResponse",
 ]
