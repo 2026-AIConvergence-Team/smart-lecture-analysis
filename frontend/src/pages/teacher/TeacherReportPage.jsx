@@ -14,6 +14,49 @@ const WEEKS = [
 
 const WEEK_CURRENT = 5;
 
+const REPORT_COURSES = [
+  {
+    id: "ds",
+    title: "자료구조론",
+    weeks: WEEKS,
+    currentWeek: WEEK_CURRENT,
+    meta: "90분 · 출제 2세트 · 응답 32명",
+  },
+  {
+    id: "os",
+    title: "운영체제",
+    weeks: [
+      { week: 2, date: "2026.04.15" },
+      { week: 3, date: "2026.04.22" },
+      { week: 4, date: "2026.04.29" },
+    ],
+    currentWeek: 4,
+    meta: "90분 · 출제 1세트 · 응답 28명",
+  },
+  {
+    id: "algo",
+    title: "알고리즘 설계",
+    weeks: [
+      { week: 3, date: "2026.04.24" },
+      { week: 4, date: "2026.05.01" },
+      { week: 5, date: "2026.05.08" },
+    ],
+    currentWeek: 5,
+    meta: "90분 · 출제 1세트 · 응답 41명",
+  },
+  {
+    id: "db",
+    title: "데이터베이스",
+    weeks: [
+      { week: 13, date: "2025.12.02" },
+      { week: 14, date: "2025.12.09" },
+      { week: 15, date: "2025.12.16" },
+    ],
+    currentWeek: 15,
+    meta: "90분 · 출제 1세트 · 응답 38명",
+  },
+];
+
 // rows: [qNum, content, pct, colorKey, topWrong]
 // colorKey: 'success' ≥70, 'warning' 50–69, 'danger' <50
 const REPORT_SETS = {
@@ -49,6 +92,74 @@ const CONCEPTS = [
   { name: "힙 트리",   score: 80, key: "success" },
 ];
 
+const COURSE_REPORTS = {
+  ds: {
+    students: 32,
+    sets: REPORT_SETS,
+    concepts: CONCEPTS,
+  },
+  os: {
+    students: 28,
+    sets: {
+      1: {
+        range: [2, 6],
+        avg: 71,
+        rows: [
+          ["Q1", "실행 중인 프로그램을 무엇이라고 하는가", 82, "success", "스레드 (11%)"],
+          ["Q2", "CPU 스케줄링의 주된 목적은?", 63, "warning", "디스크 포맷 (21%)"],
+          ["Q3", "교착상태의 필요 조건 중 하나는?", 68, "warning", "선점 가능 (18%)"],
+        ],
+      },
+    },
+    concepts: [
+      { name: "프로세스", score: 82, key: "success" },
+      { name: "스케줄링", score: 63, key: "warning" },
+      { name: "교착상태", score: 68, key: "warning" },
+      { name: "메모리 관리", score: 74, key: "success" },
+    ],
+  },
+  algo: {
+    students: 41,
+    sets: {
+      1: {
+        range: [3, 7],
+        avg: 76,
+        rows: [
+          ["Q1", "이진 탐색의 시간 복잡도는?", 86, "success", "O(n) (9%)"],
+          ["Q2", "퀵 정렬의 평균 시간 복잡도는?", 69, "warning", "O(n) (18%)"],
+          ["Q3", "그리디 알고리즘의 핵심 선택 기준은?", 73, "success", "전체 탐색 (16%)"],
+        ],
+      },
+    },
+    concepts: [
+      { name: "Big-O", score: 86, key: "success" },
+      { name: "정렬", score: 69, key: "warning" },
+      { name: "그리디", score: 73, key: "success" },
+      { name: "동적 계획법", score: 58, key: "warning" },
+    ],
+  },
+  db: {
+    students: 38,
+    sets: {
+      1: {
+        range: [8, 12],
+        avg: 70,
+        rows: [
+          ["Q1", "데이터 중복을 줄이는 설계 과정은?", 78, "success", "인덱싱 (13%)"],
+          ["Q2", "ACID 중 일관성의 의미는?", 56, "warning", "로그 삭제 (25%)"],
+          ["Q3", "기본키의 특징으로 옳은 것은?", 75, "success", "중복 가능 (15%)"],
+        ],
+      },
+    },
+    concepts: [
+      { name: "정규화", score: 78, key: "success" },
+      { name: "트랜잭션", score: 56, key: "warning" },
+      { name: "키 제약", score: 75, key: "success" },
+      { name: "SQL 조인", score: 64, key: "warning" },
+    ],
+  },
+};
+
 const QNA_ITEMS = [
   { week: 5, time: "22분 전", text: "스택 오버플로우가 언제 발생하나요?" },
   { week: 5, time: "15분 전", text: "연결 리스트와 배열의 가장 큰 차이가 뭔지 다시 정리해주세요." },
@@ -63,7 +174,10 @@ const COLOR_VAR = {
 };
 
 function TeacherReportPage() {
-  const [currentWeek, setCurrentWeek] = useState(WEEK_CURRENT);
+  const [activeCourseId, setActiveCourseId] = useState("ds");
+  const activeCourse = REPORT_COURSES.find((course) => course.id === activeCourseId) || REPORT_COURSES[0];
+  const activeReport = COURSE_REPORTS[activeCourseId] || COURSE_REPORTS.ds;
+  const [currentWeek, setCurrentWeek] = useState(activeCourse.currentWeek);
   const [activeSetId, setActiveSetId] = useState(1);
   const [qnaItems] = useState(() => {
     const cached = getQuestionsCache();
@@ -76,14 +190,23 @@ function TeacherReportPage() {
     ];
   });
 
-  const weekData = WEEKS.find((w) => w.week === currentWeek);
+  const weekData = activeCourse.weeks.find((w) => w.week === currentWeek);
   const isFutureWeek = weekData?.future;
-  const activeSet = REPORT_SETS[activeSetId];
+  const activeSet = activeReport.sets[activeSetId] || Object.values(activeReport.sets)[0];
+  const totalSetCount = Object.keys(activeReport.sets).length;
+  const totalQuestionCount = Object.values(activeReport.sets).reduce((sum, set) => sum + set.rows.length, 0);
+
+  const handleCourseChange = (courseId) => {
+    const nextCourse = REPORT_COURSES.find((course) => course.id === courseId) || REPORT_COURSES[0];
+    setActiveCourseId(courseId);
+    setCurrentWeek(nextCourse.currentWeek);
+    setActiveSetId(1);
+  };
 
   const handleWeekChange = (step) => {
-    const newWeek = currentWeek + step;
-    const valid = WEEKS.find((w) => w.week === newWeek);
-    if (valid) setCurrentWeek(newWeek);
+    const idx = activeCourse.weeks.findIndex((w) => w.week === currentWeek);
+    const next = activeCourse.weeks[idx + step];
+    if (next) setCurrentWeek(next.week);
   };
 
   return (
@@ -93,20 +216,32 @@ function TeacherReportPage() {
         {/* ── 헤더 ── */}
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 18, marginBottom: 22 }}>
           <div>
-            <p className="eyebrow">Weekly Report</p>
-            <h1 className="page-title">자료구조론 {currentWeek}주차 — 수업 리포트</h1>
+            <div className="review-eyebrow-row">
+              <p className="eyebrow">Weekly Report</p>
+              <label className="review-course-picker">
+                <span>강의</span>
+                <select value={activeCourseId} onChange={(e) => handleCourseChange(e.target.value)}>
+                  {REPORT_COURSES.map((course) => (
+                    <option key={course.id} value={course.id}>
+                      {course.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <h1 className="page-title">{activeCourse.title} {currentWeek}주차 — 수업 리포트</h1>
             <p className="page-sub">
-              {weekData?.date} · 90분 · 출제 2세트 · 응답 32명
+              {weekData?.date} · {activeCourse.meta}
             </p>
           </div>
 
           {/* Week nav — right side with arrows + label + menu icon */}
-          <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, marginTop: 4 }}>
+          <div className="week-nav" style={{ flexShrink: 0, marginTop: 4 }}>
             <button
               className="btn-arrow"
               type="button"
               onClick={() => handleWeekChange(-1)}
-              disabled={currentWeek === Math.min(...WEEKS.map((w) => w.week))}
+              disabled={activeCourse.weeks.findIndex((w) => w.week === currentWeek) <= 0}
             >
               <ChevronLeft size={16} />
             </button>
@@ -118,14 +253,13 @@ function TeacherReportPage() {
               className="btn-arrow"
               type="button"
               onClick={() => handleWeekChange(1)}
-              disabled={currentWeek === Math.max(...WEEKS.map((w) => w.week))}
+              disabled={activeCourse.weeks.findIndex((w) => w.week === currentWeek) >= activeCourse.weeks.length - 1}
             >
               <ChevronRight size={16} />
             </button>
             <button
               className="btn-arrow"
               type="button"
-              style={{ marginLeft: 4 }}
             >
               <AlignJustify size={15} />
             </button>
@@ -163,19 +297,19 @@ function TeacherReportPage() {
               <div className="card card-pad">
                 <div style={{ fontSize: 11, color: "var(--zinc-500)", fontWeight: 600 }}>참여 학생</div>
                 <div style={{ fontSize: 24, fontWeight: 700, marginTop: 6 }}>
-                  32 <span style={{ fontSize: 13, color: "var(--zinc-500)", fontWeight: 500 }}>명</span>
+                  {activeReport.students} <span style={{ fontSize: 13, color: "var(--zinc-500)", fontWeight: 500 }}>명</span>
                 </div>
               </div>
               <div className="card card-pad">
                 <div style={{ fontSize: 11, color: "var(--zinc-500)", fontWeight: 600 }}>출제 세트 · 문제</div>
                 <div style={{ fontSize: 24, fontWeight: 700, marginTop: 6 }}>
-                  2 / 8 <span style={{ fontSize: 13, color: "var(--zinc-500)", fontWeight: 500 }}>개</span>
+                  {totalSetCount} / {totalQuestionCount} <span style={{ fontSize: 13, color: "var(--zinc-500)", fontWeight: 500 }}>개</span>
                 </div>
               </div>
               <div className="card card-pad">
                 <div style={{ fontSize: 11, color: "var(--zinc-500)", fontWeight: 600 }}>평균 정답률</div>
                 <div style={{ fontSize: 24, fontWeight: 700, marginTop: 6, color: "var(--success-700)" }}>
-                  68 <span style={{ fontSize: 13, color: "var(--zinc-500)", fontWeight: 500 }}>%</span>
+                  {activeSet.avg} <span style={{ fontSize: 13, color: "var(--zinc-500)", fontWeight: 500 }}>%</span>
                 </div>
               </div>
               <div className="card card-pad">
@@ -195,7 +329,7 @@ function TeacherReportPage() {
                 </div>
               </div>
               <div className="card-pad" style={{ paddingTop: 10 }}>
-                {CONCEPTS.map((c) => (
+                {activeReport.concepts.map((c) => (
                   <div key={c.name} className="concept-row">
                     <div className="lbl">{c.name}</div>
                     <div className="bar">
@@ -227,7 +361,7 @@ function TeacherReportPage() {
                   </div>
                 </div>
                 <div className="set-tabs">
-                  {Object.entries(REPORT_SETS).map(([id, set]) => (
+                  {Object.entries(activeReport.sets).map(([id]) => (
                     <button
                       key={id}
                       className={`set-tab ${activeSetId === parseInt(id) ? "active" : ""}`}

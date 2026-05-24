@@ -717,6 +717,39 @@ body[data-role="student"] .profile-card .av { background:var(--brand); }
 .week-nav .btn-arrow:hover { background:var(--zinc-200); }
 .week-nav .now { font-size:13px; font-weight:700; color:var(--zinc-900); padding:0 8px; }
 .week-nav .now .sub { color:var(--zinc-500); font-weight:500; margin-left:8px; font-size:11.5px; }
+.review-eyebrow-row {
+  display:flex;
+  align-items:center;
+  gap:12px;
+  flex-wrap:wrap;
+}
+.review-course-picker {
+  height:34px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:4px 8px 4px 10px;
+  background:#fff;
+  border:1px solid var(--zinc-200);
+  border-radius:10px;
+}
+.review-course-picker span {
+  font-size:11px;
+  font-weight:700;
+  color:var(--brand-deep);
+}
+.review-course-picker select {
+  min-width:128px;
+  height:26px;
+  padding:0 26px 0 9px;
+  border:0;
+  border-radius:8px;
+  background:var(--brand-softer);
+  color:var(--zinc-900);
+  font-size:13px;
+  font-weight:700;
+  outline:none;
+}
 
 /* Concept bar */
 .concept-row { display:grid; grid-template-columns:140px 1fr 56px; gap:14px; align-items:center; padding:7px 0; }

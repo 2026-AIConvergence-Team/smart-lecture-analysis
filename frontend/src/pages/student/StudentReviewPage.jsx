@@ -11,6 +11,49 @@ const WEEKS = [
   { week: 6, date: "2026.05.20" },
 ];
 
+const REVIEW_COURSES = [
+  {
+    id: "ds",
+    title: "자료구조론",
+    meta: "컴퓨터공학과 · 월/수 10:30",
+    week: 5,
+    weeks: WEEKS,
+  },
+  {
+    id: "os",
+    title: "운영체제",
+    meta: "컴퓨터공학과 · 화/목 13:30",
+    week: 4,
+    weeks: [
+      { week: 2, date: "2026.04.15" },
+      { week: 3, date: "2026.04.22" },
+      { week: 4, date: "2026.04.29" },
+    ],
+  },
+  {
+    id: "algo",
+    title: "알고리즘 설계",
+    meta: "소프트웨어학부 · 금 09:00",
+    week: 5,
+    weeks: [
+      { week: 3, date: "2026.04.24" },
+      { week: 4, date: "2026.05.01" },
+      { week: 5, date: "2026.05.08" },
+    ],
+  },
+  {
+    id: "db",
+    title: "데이터베이스",
+    meta: "컴퓨터공학과 · 화/목 13:30",
+    week: 15,
+    weeks: [
+      { week: 13, date: "2025.12.02" },
+      { week: 14, date: "2025.12.09" },
+      { week: 15, date: "2025.12.16" },
+    ],
+  },
+];
+
 // Mock quiz sets for review
 // studentAnswer: index the student chose, answer: correct index
 const SETS = [
@@ -87,6 +130,106 @@ const SETS = [
   },
 ];
 
+const COURSE_SETS = {
+  ds: SETS,
+  os: [
+    {
+      id: 1,
+      label: "세트 #1",
+      pdfRange: "p.2–6",
+      startPage: 2,
+      quizzes: [
+        {
+          id: 2001,
+          n: "Q1",
+          keyword: "프로세스",
+          question: "실행 중인 프로그램을 무엇이라고 하나요?",
+          choices: ["프로세스", "스레드", "커널", "캐시"],
+          answer: 0,
+          studentAnswer: 0,
+          errorRate: 24,
+          explain: "프로세스는 메모리에 올라와 실행 중인 프로그램 단위입니다.",
+        },
+        {
+          id: 2002,
+          n: "Q2",
+          keyword: "스케줄링",
+          question: "CPU 스케줄링의 주된 목적은?",
+          choices: ["CPU 효율 향상", "디스크 포맷", "네트워크 암호화", "파일 압축"],
+          answer: 0,
+          studentAnswer: 2,
+          errorRate: 47,
+          explain: "스케줄링은 준비 큐의 프로세스 중 CPU를 배정할 대상을 정해 효율을 높입니다.",
+        },
+      ],
+    },
+  ],
+  algo: [
+    {
+      id: 1,
+      label: "세트 #1",
+      pdfRange: "p.3–7",
+      startPage: 3,
+      quizzes: [
+        {
+          id: 3001,
+          n: "Q1",
+          keyword: "Big-O",
+          question: "이진 탐색의 시간 복잡도는?",
+          choices: ["O(log n)", "O(n)", "O(n²)", "O(1)"],
+          answer: 0,
+          studentAnswer: 0,
+          errorRate: 19,
+          explain: "이진 탐색은 탐색 범위를 절반씩 줄이므로 O(log n)입니다.",
+        },
+        {
+          id: 3002,
+          n: "Q2",
+          keyword: "정렬",
+          question: "퀵 정렬의 평균 시간 복잡도는?",
+          choices: ["O(n log n)", "O(n)", "O(log n)", "O(n³)"],
+          answer: 0,
+          studentAnswer: 1,
+          errorRate: 39,
+          explain: "퀵 정렬은 평균적으로 분할이 균형 있게 일어나 O(n log n)입니다.",
+        },
+      ],
+    },
+  ],
+  db: [
+    {
+      id: 1,
+      label: "세트 #1",
+      pdfRange: "p.8–12",
+      startPage: 8,
+      quizzes: [
+        {
+          id: 4001,
+          n: "Q1",
+          keyword: "정규화",
+          question: "데이터 중복을 줄이고 이상 현상을 방지하는 설계 과정은?",
+          choices: ["정규화", "파티셔닝", "인덱싱", "샤딩"],
+          answer: 0,
+          studentAnswer: 0,
+          errorRate: 22,
+          explain: "정규화는 중복과 삽입/삭제/갱신 이상을 줄이기 위한 관계형 DB 설계 과정입니다.",
+        },
+        {
+          id: 4002,
+          n: "Q2",
+          keyword: "트랜잭션",
+          question: "트랜잭션의 ACID 중 일관성은 무엇을 의미하나요?",
+          choices: ["규칙을 만족한 상태 유지", "동시 실행 차단", "항상 빠른 조회", "로그 삭제"],
+          answer: 0,
+          studentAnswer: 2,
+          errorRate: 44,
+          explain: "일관성은 트랜잭션 전후 데이터가 정의된 제약조건과 규칙을 만족해야 함을 뜻합니다.",
+        },
+      ],
+    },
+  ],
+};
+
 const MEMO_PREFIX = "quizsync-memo-5-";
 const LIVE_RESULTS_KEY = "quizsync-liveresults-5";
 
@@ -117,9 +260,11 @@ function saveMemo(qid, text) {
 
 function StudentReviewPage() {
   const pdfCache = getPdfCache();
-  const [currentWeek, setCurrentWeek] = useState(5);
-  // Load real session data if available, fall back to mock SETS
-  const [sets, setSets] = useState(() => loadLiveSets() || SETS);
+  const [activeCourseId, setActiveCourseId] = useState("ds");
+  const activeCourse = REVIEW_COURSES.find((course) => course.id === activeCourseId) || REVIEW_COURSES[0];
+  const [currentWeek, setCurrentWeek] = useState(activeCourse.week);
+  // Load real session data if available for 자료구조론, fall back to per-course mock sets.
+  const [sets, setSets] = useState(() => loadLiveSets() || COURSE_SETS.ds);
   const [activeSetId, setActiveSetId] = useState(() => {
     const live = loadLiveSets();
     return live ? live[0]?.id : 1;
@@ -138,6 +283,24 @@ function StudentReviewPage() {
     return m;
   });
 
+  useEffect(() => {
+    const nextCourse = REVIEW_COURSES.find((course) => course.id === activeCourseId) || REVIEW_COURSES[0];
+    const nextSets = activeCourseId === "ds" ? loadLiveSets() || COURSE_SETS.ds : COURSE_SETS[activeCourseId];
+    setCurrentWeek(nextCourse.week);
+    setSets(nextSets);
+    setActiveSetId(nextSets[0]?.id || 1);
+    setPdfPage(nextSets[0]?.startPage || 1);
+    setFilterMode("all");
+
+    const nextMemos = {};
+    nextSets.forEach((s) =>
+      s.quizzes.forEach((q) => {
+        nextMemos[q.id] = loadMemo(q.id);
+      })
+    );
+    setMemos(nextMemos);
+  }, [activeCourseId]);
+
   // Apply student theme
   useEffect(() => {
     document.body.setAttribute("data-role", "student");
@@ -150,12 +313,15 @@ function StudentReviewPage() {
     if (set?.startPage) setPdfPage(set.startPage);
   }, [activeSetId, sets]);
 
-  const weekData = WEEKS.find((w) => w.week === currentWeek) || WEEKS[2];
+  const weekData =
+    activeCourse.weeks.find((w) => w.week === currentWeek) ||
+    activeCourse.weeks[activeCourse.weeks.length - 1];
   const activeSet = sets.find((s) => s.id === activeSetId) || sets[0];
 
   const handleWeekChange = (delta) => {
-    const next = currentWeek + delta;
-    if (next >= 1 && next <= 16) setCurrentWeek(next);
+    const idx = activeCourse.weeks.findIndex((w) => w.week === currentWeek);
+    const next = activeCourse.weeks[idx + delta];
+    if (next) setCurrentWeek(next.week);
   };
 
   const handleMemoChange = (qid, text) => {
@@ -185,7 +351,19 @@ function StudentReviewPage() {
         {/* Left: quiz review panel */}
         <div className="review-quiz-panel">
           <div className="content">
-            <p className="eyebrow">My Review</p>
+            <div className="review-eyebrow-row">
+              <p className="eyebrow">My Review</p>
+              <label className="review-course-picker">
+                <span>강의</span>
+                <select value={activeCourseId} onChange={(e) => setActiveCourseId(e.target.value)}>
+                  {REVIEW_COURSES.map((course) => (
+                    <option key={course.id} value={course.id}>
+                      {course.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <div
               style={{
                 display: "flex",
@@ -197,10 +375,10 @@ function StudentReviewPage() {
             >
               <div>
                 <h1 className="page-title">
-                  자료구조론 {currentWeek}주차 복습
+                  {activeCourse.title} {currentWeek}주차 복습
                 </h1>
                 <p className="page-sub">
-                  수업 중에 풀었던 퀴즈와 본인이 남긴 메모를 함께 확인할 수 있어요.
+                  {activeCourse.meta} · 수업 중에 풀었던 퀴즈와 본인이 남긴 메모를 함께 확인할 수 있어요.
                 </p>
               </div>
               <div className="week-nav">
@@ -449,10 +627,10 @@ function StudentReviewPage() {
           </div>
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <PdfViewer
-              pdfData={pdfData}
+              pdfData={activeCourseId === "ds" ? pdfData : null}
               currentPage={pdfPage}
               onPageChange={setPdfPage}
-              initialTotalPages={pdfCache.pdfTotal}
+              initialTotalPages={activeCourseId === "ds" ? pdfCache.pdfTotal : 0}
               role="student"
               variant="review"
             />
