@@ -5,7 +5,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.lecture import LectureResponse
 
-
 class CourseCreate(BaseModel):
     title: str = Field(..., min_length=1)
     department: str = Field(..., min_length=1)
