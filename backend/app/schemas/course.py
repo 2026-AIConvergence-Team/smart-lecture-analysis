@@ -1,9 +1,7 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
-
-from app.schemas.lecture import LectureResponse
 
 
 class CourseCreate(BaseModel):
@@ -40,7 +38,3 @@ class CourseResponse(BaseModel):
     section: str
     created_at: datetime
     updated_at: datetime
-
-
-class CourseWithLecturesResponse(CourseResponse):
-    lectures: List[LectureResponse] = Field(default_factory=list)
