@@ -44,6 +44,74 @@ def is_sentence_like_answer(value: str) -> bool:
 
     return any(marker in compact for marker in SENTENCE_LIKE_ANSWER_MARKERS)
 
+def is_cut_or_dangling_answer(value: str) -> bool:
+    cleaned = normalize_text(value)
+    compact = compact_text(cleaned)
+
+    if not compact or len(compact) <= 10:
+        return False
+
+    dangling_endings = (
+        "을",
+        "를",
+        "은",
+        "는",
+        "이",
+        "가",
+        "의",
+        "에",
+        "로",
+        "으로",
+        "와",
+        "과",
+        "통해",
+        "위해",
+        "따라",
+        "대해",
+        "관한",
+        "이것이",
+        "영향을",
+        "것을",
+        "것이",
+    )
+
+    if compact.endswith(dangling_endings):
+        return True
+
+    complete_markers = (
+        "다",
+        "한다",
+        "된다",
+        "있다",
+        "없다",
+        "이다",
+        "함",
+        "있음",
+        "가능",
+        "필요",
+        "의미",
+        "증가",
+        "감소",
+        "변화",
+        "영향",
+        "연관",
+        "관련",
+        "담당",
+        "형성",
+        "보유",
+        "설명",
+        "수행",
+        "높아짐",
+        "낮아짐",
+        "존재",
+        "추정",
+        "나타남",
+    )
+
+    if len(compact) >= 22 and not any(marker in compact for marker in complete_markers):
+        return True
+
+    return False
 
 def is_weak_blank_answer(value: str) -> bool:
     cleaned = normalize_text(value)
@@ -54,7 +122,7 @@ def is_weak_blank_answer(value: str) -> bool:
 
     normalized_weak_words = {
         compact_text(word)
-        for word in WEAK_BLANK_ANSWER_WORDS
+        for word in [*WEAK_BLANK_ANSWER_WORDS, *EXTRA_WEAK_BLANK_ANSWER_WORDS]
     }
 
     if compact in normalized_weak_words:
@@ -67,6 +135,95 @@ def is_weak_blank_answer(value: str) -> bool:
         return True
 
     return False
+
+
+EXTRA_WEAK_BLANK_ANSWER_WORDS = {
+    "초기",
+    "확인",
+    "방울",
+    "가위",
+    "바위",
+    "보",
+    "부분",
+    "부위",
+    "경우",
+    "과정",
+    "방법",
+    "결과",
+    "상태",
+}
+
+
+def is_bad_blank_question_shape(question: str) -> bool:
+    cleaned = normalize_text(question)
+    compact = compact_text(cleaned)
+
+    if not compact:
+        return True
+
+    if compact.startswith("___") or compact.endswith("___"):
+        return True
+
+    if "___:" in compact or ":___" in compact:
+        return True
+
+    left, _, right = cleaned.partition("___")
+    if len(compact_text(left)) < 4 or len(compact_text(right)) < 4:
+        return True
+
+    return False
+
+
+def is_valid_ox_statement(statement: str) -> bool:
+    cleaned = normalize_text(statement)
+    compact = compact_text(cleaned)
+    normalized = normalize_for_match(cleaned)
+
+    if len(compact) < 14:
+        return False
+
+    if "vs" in normalized:
+        return False
+
+    weak_endings = (
+        "통해가",
+        "시냅스가중",
+        "이후의일",
+        "것을",
+        "관한",
+        "통해",
+        "위해",
+        "나누",
+    )
+    if compact.endswith(weak_endings):
+        return False
+
+    predicate_markers = (
+        "이다",
+        "한다",
+        "된다",
+        "있다",
+        "없다",
+        "의미",
+        "제공",
+        "가능",
+        "수행",
+        "증가",
+        "감소",
+        "변화",
+        "영향",
+        "연관",
+        "사용",
+        "필요",
+        "담당",
+        "형성",
+        "보유",
+        "설명",
+        "선택",
+        "수정",
+    )
+
+    return any(marker in compact for marker in predicate_markers)
 
 
 def normalize_for_match(value: str) -> str:
@@ -254,6 +411,7 @@ def validate_generated_quiz_dict(
     quiz_type = normalize_quiz_type(quiz_data.get("quiz_type"))
     question = normalize_text(quiz_data.get("question"))
     answer = normalize_text(quiz_data.get("answer"))
+    source_sentence = normalize_text(quiz_data.get("source_sentence"))
     options = quiz_data.get("options") or []
 
     if quiz_type not in SUPPORTED_GENERATED_QUIZ_TYPES:
@@ -268,6 +426,12 @@ def validate_generated_quiz_dict(
     if not answer:
         return "answer가 비어 있습니다."
 
+    if source_sentence and is_cut_or_dangling_answer(source_sentence):
+        return "source_sentence가 중간에서 잘린 원문 조각입니다."
+
+    if quiz_type == "DEFINITION" and is_cut_or_dangling_answer(answer):
+        return "DEFINITION 정답이 중간에서 잘린 원문 조각입니다."
+    
     if not isinstance(options, list):
         return "options는 배열이어야 합니다."
 
@@ -279,6 +443,10 @@ def validate_generated_quiz_dict(
 
         if answer not in ["O", "X"]:
             return "OX 문제의 answer는 O 또는 X여야 합니다."
+
+        statement = question.split("\n\n")[-1].strip()
+        if not is_valid_ox_statement(statement):
+            return "OX 문제는 참/거짓 판단 가능한 완전한 명제여야 합니다."
 
         return None
 
@@ -302,8 +470,12 @@ def validate_generated_quiz_dict(
         if "___" not in question:
             return "BLANK 문제에는 ___가 포함되어야 합니다."
 
+        if is_bad_blank_question_shape(question):
+            return "BLANK 문제가 원문 조각 맞추기 형태입니다."
+
         if is_weak_blank_answer(answer):
             return "BLANK 정답은 단순 부사/수식어가 아니라 핵심 개념어여야 합니다."
+        
 
     if quiz_type == "KEYWORD_CHOICE":
         if len(answer) > MAX_KEYWORD_CHOICE_ANSWER_LENGTH:
