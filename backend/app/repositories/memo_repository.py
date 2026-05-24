@@ -36,3 +36,13 @@ def get_memos_by_student_and_lecture(db: Session, student_id: int, lecture_id: i
         Memo.student_id == student_id,
         Quiz.lecture_id == lecture_id
     ).all()
+
+
+def save_memo(db: Session, memo: Memo) -> Memo:
+    db.commit()
+    db.refresh(memo)
+    return memo
+
+
+def rollback(db: Session):
+    db.rollback()
