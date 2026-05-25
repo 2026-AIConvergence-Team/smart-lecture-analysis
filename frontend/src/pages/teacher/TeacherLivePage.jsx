@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Sparkles, Zap, AlertCircle, Send, CheckCircle2, Pencil, Trash2, Plus } from "lucide-react";
+import { Sparkles, Zap, AlertCircle, Send, CheckCircle2, Pencil, Trash2, Plus, RotateCcw } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import PdfViewer from "../../components/PdfViewer.jsx";
 import { keywordsFor, quizFromKeyword, botCounts, BOT_RESP, SAMPLE_QUESTIONS } from "../../data/quizSyncMock.js";
 import useBroadcastChannel from "../../hooks/useBroadcastChannel.js";
 import { appendQuestionCache, getQuestionsCache, setPdfCache, setQuizSets, setCourseInfo, getPdfCache } from "../../data/sessionCache.js";
-import { generateQuizzes, getQuizGenerateStatus, getConcepts, getLectureQuizzes, deleteQuiz, updateQuizStatus, createManualQuiz, updateQuiz, getQuizDetail, getLecture, updateLectureStatus, getQuizSets, updateQuizSetStatus } from "../../api/lectureApi.js";
+import { generateQuizzes, getQuizGenerateStatus, getConcepts, getLectureQuizzes, deleteQuiz, updateQuizStatus, createManualQuiz, updateQuiz, getQuizDetail, getLecture, updateLectureStatus, getQuizSets, updateQuizSetStatus, regenerateQuiz, getQuestions } from "../../api/lectureApi.js";
 
 const PALETTE = ["var(--brand)", "var(--warning)", "#94a3b8", "#cbd5e1"];
 
@@ -98,6 +98,7 @@ function TeacherLivePage() {
   const [rangeEnd, setRangeEnd] = useState(3);
   const [extractedKeywords, setExtractedKeywords] = useState([]);
   const [selectedKeywords, setSelectedKeywords] = useState([]);
+  const [keywordConceptMap, setKeywordConceptMap] = useState({}); // keyword → concept_id
   const [quizDraft, setQuizDraft] = useState(currentQuizSet);
   const [concepts, setConcepts] = useState([]);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
@@ -191,7 +192,26 @@ function TeacherLivePage() {
         }
       })
       .catch(() => {});
-  }, [lectureId]);
+    // 기존 익명 질문 목록 로드 (수업 중 새 질문은 STUDENT_QUESTION 브로드캐스트로 추가됨)
+    getQuestions(lectureId)
+      .then((res) => {
+        const list = Array.isArray(res) ? res : [];
+        if (list.length === 0) return;
+        setQuestions((prev) => {
+          const existingIds = new Set(prev.map((q) => q.id));
+          const incoming = list
+            .filter((q) => !existingIds.has(q.id))
+            .map((q) => ({
+              id: q.id,
+              text: q.content,
+              week,
+              time: new Date(q.created_at).toLocaleTimeString("ko-KR"),
+            }));
+          return incoming.length > 0 ? [...incoming, ...prev] : prev;
+        });
+      })
+      .catch(() => {});
+  }, [lectureId, week]);
 
   // Keep refs current so handleMessage can read latest state
   useEffect(() => { pdfDataRef.current = pdfData; }, [pdfData]);
@@ -306,7 +326,82 @@ function TeacherLivePage() {
       (c) => !c.page_num || (c.page_num >= rangeStart && c.page_num <= rangeEnd)
     );
     const list = filtered.length > 0 ? filtered : concepts;
-    setExtractedKeywords(list.map((c) => c.concept_name));
+
+    // keywords 배열(짧은 핵심어) 우선 사용, 없으면 짧은 concept_name fallback
+    const map = {};
+    const seen = new Set();
+    const kwList = [];
+
+    const BAD_ENDINGS = [
+      "으며", "이며", "하며", "되며", "고서", "어서", "하여", "되어",
+      "있으며", "이고", "하고", "되고", "으로", "에서", "부터", "까지",
+      "에게", "보다", "있음", "없음", "이란", "하는", "되는", "이다",
+      "한다", "된다", "하다", "지다", "수있음", "ㄹ수있음", "처지", "쳐지",
+    ];
+    const BAD_STARTS = ["을", "를", "의", "에", "와", "과", "도", "만", "어떤", "이런", "그런", "저런"];
+    // compact 안에 포함되면 노이즈로 간주
+    const NOISE_CONTAINS = ["어떤", "화학물질"];
+
+    const addKw = (kw, conceptId) => {
+      let t = kw.trim();
+      if (!t) return;
+
+      // 영문 혼합("옥신 auxin") → 한국어 부분만 추출
+      const koreanOnly = t.replace(/\s+[A-Za-z][A-Za-z\s]*$/, "").trim();
+      if (koreanOnly && koreanOnly !== t) t = koreanOnly;
+
+      // 영문만 있는 키워드 제외 (단, 2자 이하 약어는 허용)
+      if (/^[A-Za-z\s]+$/.test(t) && t.replace(/\s/g, "").length > 2) return;
+
+      const compact = t.replace(/\s+/g, "");
+
+      // 최소 2자
+      if (compact.length < 2) return;
+      // 공백 제거 기준 8자 초과는 문장형으로 간주
+      if (compact.length > 8) return;
+      // 문장형 어미로 끝나는 것 제외
+      if (BAD_ENDINGS.some((e) => compact.endsWith(e))) return;
+      // 조사로 시작하는 것 제외
+      if (BAD_STARTS.some((s) => compact.startsWith(s))) return;
+      // 노이즈 단어가 포함된 것 제외
+      if (NOISE_CONTAINS.some((s) => compact.includes(s))) return;
+
+      // 이미 동일한 compact가 등록됐으면 skip (중복 방지)
+      const compactKey = compact.toLowerCase();
+      if (seen.has(compactKey)) return;
+      seen.add(compactKey);
+      map[t] = conceptId;
+      kwList.push(t);
+    };
+
+    // 1) 각 concept의 keywords 배열에서 핵심어 수집
+    list.forEach((c) => {
+      const kws = Array.isArray(c.keywords) ? c.keywords : [];
+      kws.forEach((kw) => addKw(kw, c.concept_id));
+    });
+
+    // 2) keywords가 없거나 너무 적으면 짧은 concept_name도 추가
+    if (kwList.length < list.length) {
+      list.forEach((c) => {
+        if (c.concept_name) addKw(c.concept_name, c.concept_id);
+      });
+    }
+
+    // 3) 그래도 없으면 길이 제한 없이 concept_name 그대로 (최후 수단)
+    if (kwList.length === 0) {
+      list.forEach((c) => {
+        const t = c.concept_name?.trim();
+        if (!t) return;
+        const compactKey = t.replace(/\s+/g, "").toLowerCase();
+        if (seen.has(compactKey)) return;
+        seen.add(compactKey);
+        map[t] = c.concept_id;
+        kwList.push(t);
+      });
+    }
+
+    setKeywordConceptMap(map);
+    setExtractedKeywords(kwList);
     setSelectedKeywords([]);
   };
 
@@ -331,7 +426,7 @@ function TeacherLivePage() {
     }
 
     const conceptIds = selectedKeywords
-      .map((kw) => concepts.find((c) => c.concept_name === kw)?.concept_id)
+      .map((kw) => keywordConceptMap[kw] ?? concepts.find((c) => c.concept_name === kw)?.concept_id)
       .filter(Boolean);
 
     setLoadingQuiz(true);
@@ -377,6 +472,30 @@ function TeacherLivePage() {
       deleteQuiz(target?.setId, quizId).catch((err) => console.error("퀴즈 삭제 실패:", err.message));
     }
     setQuizDraft((prev) => prev.filter((q) => q.id !== quizId));
+  };
+
+  // ── 퀴즈 재생성 (regenerateQuiz) ───────────────────────
+  const handleRegenerateQuiz = (quiz) => {
+    if (!quiz.setId || !lectureId) return;
+    regenerateQuiz(quiz.setId, quiz.id, { use_ai: true, difficulty: "MEDIUM" })
+      .then((data) => {
+        setQuizDraft((prev) =>
+          prev.map((q) =>
+            q.id === quiz.id
+              ? {
+                  ...q,
+                  question: data.question ?? q.question,
+                  choices: Array.isArray(data.options) ? data.options : q.choices,
+                  answer: Array.isArray(data.options)
+                    ? Math.max(0, data.options.indexOf(data.answer))
+                    : q.answer,
+                  explain: data.explanation ?? q.explain,
+                }
+              : q
+          )
+        );
+      })
+      .catch((err) => console.error("퀴즈 재생성 실패:", err.message));
   };
 
   // ── 퀴즈 수정 폼 열기 (getQuizDetail → editForm 세팅) ──
@@ -519,7 +638,7 @@ function TeacherLivePage() {
       startPage: rangeStart,
       pdfRange: rangeStart === rangeEnd ? `p.${rangeStart}` : `p.${rangeStart}-${rangeEnd}`,
     });
-    // 배포 후 백엔드 세트 목록 재조회 → 로컬 세트에 setId 주입
+    // 배포 후 백엔드 세트 목록 재조회 → 로컬 세트에 setId 주입 + 학생에게 백엔드 setId 전달
     if (lectureId) {
       getQuizSets(lectureId)
         .then((res) => {
@@ -531,6 +650,8 @@ function TeacherLivePage() {
               s.id === id && !s.setId ? { ...s, setId: latest.set_id } : s
             )
           );
+          // 학생 화면에서 답안 제출 시 실제 백엔드 set_id가 필요하므로 별도 브로드캐스트
+          emit("QUIZ_SET_BACKEND_ID", { localSetId: id, backendSetId: latest.set_id });
         })
         .catch(() => {});
     }
@@ -981,7 +1102,7 @@ function TeacherLivePage() {
                             폐기
                           </button>
                         </div>
-                        <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+                        <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10, maxHeight: 380, overflowY: "auto" }}>
                           {quizDraft.map((q) => (
                             <div key={q.id} className="quiz-item">
                               <div className="quiz-item-head">
@@ -993,6 +1114,16 @@ function TeacherLivePage() {
                                   <span className="pill pill-neutral" style={{ fontSize: 10 }}>
                                     {q.type}
                                   </span>
+                                  <button
+                                    className="btn btn-ghost btn-sm"
+                                    type="button"
+                                    style={{ padding: "0 6px", height: 24 }}
+                                    title="퀴즈 재생성"
+                                    disabled={!q.setId || !lectureId}
+                                    onClick={() => handleRegenerateQuiz(q)}
+                                  >
+                                    <RotateCcw size={12} />
+                                  </button>
                                   <button
                                     className="btn btn-ghost btn-sm"
                                     type="button"

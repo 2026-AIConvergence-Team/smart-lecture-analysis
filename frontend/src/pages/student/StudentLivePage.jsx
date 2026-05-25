@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { LogOut, MessageCircle, Send } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import PdfViewer from "../../components/PdfViewer.jsx";
 import useBroadcastChannel from "../../hooks/useBroadcastChannel.js";
 import { appendQuestionCache, getPdfCache, setPdfCache } from "../../data/sessionCache.js";
+import { submitAnswers, createMemo, updateMemo, submitQuestion } from "../../api/lectureApi.js";
 
 const WEEK = 5;
 const MEMO_KEY = (qid) => `quizsync-memo-${WEEK}-${qid}`;
@@ -20,6 +21,8 @@ function saveResultsToStorage(sets) {
 
 function StudentLivePage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { lectureId = null } = location.state || {};
   const [pdfData, setPdfData] = useState(() => getPdfCache().pdfData);
   const [currentPage, setCurrentPage] = useState(1);
   // activeSet: { setId, setIdx, questions }
@@ -38,6 +41,8 @@ function StudentLivePage() {
   const choicesRef = useRef({});
   const savedSetsRef = useRef([]); // accumulates closed sets for review
   const setCounterRef = useRef(0);
+  // 메모 백엔드 저장 여부 추적: { [quiz_id]: true } → true면 PATCH, 없으면 POST
+  const memoSavedRef = useRef({});
 
   useEffect(() => { activeSetRef.current = activeSet; }, [activeSet]);
   useEffect(() => { choicesRef.current = choices; }, [choices]);
@@ -75,6 +80,16 @@ function StudentLivePage() {
       setChoices({});
       setSubmitted(false);
       setQuizClosed(false);
+    }
+
+    if (msg.type === "QUIZ_SET_BACKEND_ID") {
+      // 교수가 배포 후 백엔드에서 받은 실제 set_id를 전달 → 답안 제출 시 사용
+      setActiveSet((prev) => {
+        if (prev?.setId === msg.payload?.localSetId) {
+          return { ...prev, backendSetId: msg.payload.backendSetId };
+        }
+        return prev;
+      });
     }
 
     if (msg.type === "QUIZ_CLOSED") {
@@ -130,6 +145,7 @@ function StudentLivePage() {
 
   const handleSubmit = () => {
     if (!activeSet) return;
+    // 브로드캐스트 (기존 실시간 연동)
     activeSet.questions.forEach((q) => {
       emit("STUDENT_ANSWER", {
         setId: activeSet.setId,
@@ -137,12 +153,34 @@ function StudentLivePage() {
         choiceIdx: choices[q.id],
       });
     });
+    // 백엔드 답안 제출 — backendSetId가 있을 때만
+    if (lectureId && activeSet.backendSetId) {
+      submitAnswers(lectureId, activeSet.backendSetId, {
+        answers: activeSet.questions.map((q) => ({
+          quiz_id: q.id,
+          selected: q.choices[choices[q.id]] ?? "",
+        })),
+      }).catch((err) => console.error("답안 제출 실패:", err.message));
+    }
     setSubmitted(true);
   };
 
   const handleMemoChange = (qid, text) => {
     setMemos((prev) => ({ ...prev, [qid]: text }));
     saveMemoToStorage(qid, text);
+  };
+
+  // 메모 textarea에서 포커스가 벗어날 때 백엔드에 저장
+  // 최초 저장은 POST, 이후 수정은 PATCH
+  const handleMemoBlur = (qid, text) => {
+    if (!text.trim()) return;
+    if (memoSavedRef.current[qid]) {
+      updateMemo(qid, text).catch((err) => console.error("메모 수정 실패:", err.message));
+    } else {
+      createMemo(qid, text)
+        .then(() => { memoSavedRef.current[qid] = true; })
+        .catch((err) => console.error("메모 저장 실패:", err.message));
+    }
   };
 
   const handleSendQuestion = () => {
@@ -153,6 +191,12 @@ function StudentLivePage() {
     emit("STUDENT_QUESTION", { question });
     setRecentQuestion(text);
     setChatbotInput("");
+    // 백엔드에 익명 질문 저장 (lectureId 있을 때만)
+    if (lectureId) {
+      submitQuestion(lectureId, text).catch((err) =>
+        console.error("질문 제출 실패:", err.message)
+      );
+    }
   };
 
   const allAnswered =
@@ -325,6 +369,7 @@ function StudentLivePage() {
                             placeholder="이 문제와 관련하여 메모를 남겨두세요..."
                             value={memos[q.id] || ""}
                             onChange={(e) => handleMemoChange(q.id, e.target.value)}
+                            onBlur={(e) => handleMemoBlur(q.id, e.target.value)}
                           />
                         </div>
                       </div>

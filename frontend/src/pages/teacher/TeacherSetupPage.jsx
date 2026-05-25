@@ -29,8 +29,9 @@ function estimatePdfPages(data) {
 function TeacherSetupPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const courseId   = location.state?.courseId   || null;
   const courseName = location.state?.courseName || "자료구조론";
-  const week = location.state?.week || 5;
+  const week       = location.state?.week       || 5;
   const courseMeta = location.state?.courseMeta || "2025-1 / 월,수,금";
 
   // 상태 관리
@@ -61,7 +62,7 @@ function TeacherSetupPage() {
     const time = today.toTimeString().slice(0, 5);            // "10:30"
     const title = `${courseName} ${week}주차`;
 
-    createLecture({ title, date, time })
+    createLecture({ title, date, time, ...(courseId && { course_id: courseId }) })
       .then((data) => {
         setLectureId(data.lecture_id ?? data.id);
         if (data.class_code) setCode(data.class_code);  // 서버 발급 코드 사용

@@ -219,3 +219,62 @@ export function updateQuizSetStatus(setId, status) {
     body: JSON.stringify({ status }),
   });
 }
+
+// ── 익명 질문 제출 ─────────────────────────────────────
+// POST /api/lectures/{lecture_id}/questions
+// { content } → { id, lecture_id, content, is_mine, author_display_name, created_at, ... }
+export function submitQuestion(lectureId, content) {
+  return request(`/api/lectures/${lectureId}/questions`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
+
+// ── 수업 중 익명 질문 조회 ─────────────────────────────
+// GET /api/lectures/{lecture_id}/questions
+// → [{ id, lecture_id, content, is_mine, author_display_name, created_at, ... }]
+export function getQuestions(lectureId) {
+  return request(`/api/lectures/${lectureId}/questions`);
+}
+
+// ── 특정 퀴즈에 메모 달기 ──────────────────────────────
+// POST /api/quizzes/{quiz_id}/memo
+// { content } → { id, quiz_id, student_id, content, updated_at }
+export function createMemo(quizId, content) {
+  return request(`/api/quizzes/${quizId}/memo`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
+
+// ── 메모 수정 ───────────────────────────────────────────
+// PATCH /api/quizzes/{quiz_id}/memo
+// { content } → { id, quiz_id, student_id, content, updated_at }
+export function updateMemo(quizId, content) {
+  return request(`/api/quizzes/${quizId}/memo`, {
+    method: "PATCH",
+    body: JSON.stringify({ content }),
+  });
+}
+
+// ── 퀴즈 재생성 ────────────────────────────────────────
+// POST /api/quiz-sets/{set_id}/quizzes/{quiz_id}/regenerate
+// { quiz_type?, option_count?, use_ai?, difficulty?, ai_provider?, reason? }
+// → 재생성된 퀴즈 전체 반환
+export function regenerateQuiz(setId, quizId, payload = {}) {
+  return request(`/api/quiz-sets/${setId}/quizzes/${quizId}/regenerate`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// ── 학생 답안 제출 ─────────────────────────────────────
+// POST /api/lectures/{lecture_id}/quiz-sets/{set_id}/submissions
+// { answers: [{ quiz_id, selected }] }
+// → { id, set_id, lecture_id, student_id, submitted_at, answers, total_count, correct_count }
+export function submitAnswers(lectureId, setId, payload) {
+  return request(`/api/lectures/${lectureId}/quiz-sets/${setId}/submissions`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
