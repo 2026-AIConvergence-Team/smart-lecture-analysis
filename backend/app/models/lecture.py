@@ -31,3 +31,9 @@ class Lecture(Base):
     pdf_url = Column(String, nullable=True)
 
     course = relationship("Course", back_populates="lectures")
+    participants = relationship(
+        "LectureParticipant",
+        back_populates="lecture",
+        cascade="all, delete-orphan",
+    )
+

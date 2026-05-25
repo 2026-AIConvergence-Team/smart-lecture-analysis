@@ -7,11 +7,13 @@ from app.schemas.course import (
 )
 from app.schemas.lecture import (
     ConceptDetail,
-    CourseLectureCreate,
     LectureAnalyzeRequest,
     LectureAnalyzeResponse,
+    LectureCodeResponse,
     LectureConceptsResponse,
     LectureCreate,
+    LectureJoinRequest,
+    LectureJoinResponse,
     LectureResponse,
     LectureStatusUpdateRequest,
     PDFUploadResponse,
@@ -27,6 +29,7 @@ from app.schemas.quiz import (
     QuizGenerateStatusResponse,
     QuizItemResponse,
     QuizListResponse,
+    QuizMutationResponse,
     QuizRegenerateRequest,
     QuizSetResponse,
     QuizSetWithQuizzesResponse,
@@ -35,6 +38,18 @@ from app.schemas.quiz import (
     QuizUpdateRequest,
 )
 from app.schemas.user import UserResponse
+from app.schemas.submission import (
+    SubmissionCreate,
+    SubmissionResponse,
+    SubmissionAnswerResponse,
+    AnswerItem,
+    QuizSetSubmissionCreate,
+)
+from app.schemas.memo import MemoCreate, MemoResponse, MemoUpdate
+from app.schemas.anonymous_question import (
+    AnonymousQuestionCreate,
+    AnonymousQuestionResponse,
+)
 
 __all__ = [
     "UserRole",
@@ -46,10 +61,12 @@ __all__ = [
     "CourseUpdate",
     "CourseResponse",
     "CourseWithLecturesResponse",
-    "CourseLectureCreate",
     "LectureCreate",
     "LectureResponse",
     "LectureStatusUpdateRequest",
+    "LectureCodeResponse",
+    "LectureJoinRequest",
+    "LectureJoinResponse",
     "PDFUploadResponse",
     "TextExtractStartResponse",
     "PagePreview",
@@ -64,6 +81,7 @@ __all__ = [
     "QuizGenerateStatusResponse",
     "QuizItemResponse",
     "QuizListResponse",
+    "QuizMutationResponse",
     "QuizRegenerateRequest",
     "QuizUpdateRequest",
     "ManualQuizCreateRequest",
@@ -71,4 +89,14 @@ __all__ = [
     "QuizSetStatusUpdateRequest",
     "QuizSetResponse",
     "QuizSetWithQuizzesResponse",
+    "SubmissionCreate",
+    "QuizSetSubmissionCreate",
+    "SubmissionResponse",
+    "SubmissionAnswerResponse",
+    "AnswerItem",
+    "MemoCreate",
+    "MemoUpdate",
+    "MemoResponse",
+    "AnonymousQuestionCreate",
+    "AnonymousQuestionResponse",
 ]

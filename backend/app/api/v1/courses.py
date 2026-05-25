@@ -96,20 +96,6 @@ def list_courses(
     return course_repository.get_courses(db)
 
 
-@router.get(
-    "/{course_id}",
-    response_model=schemas.CourseWithLecturesResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Get course with lectures",
-)
-def get_course(
-    course_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
-):
-    return get_visible_course_or_404(db, course_id, current_user)
-
-
 @router.patch(
     "/{course_id}",
     response_model=schemas.CourseResponse,
@@ -168,47 +154,6 @@ def delete_course(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete course: {exc}",
-        ) from exc
-
-
-@router.post(
-    "/{course_id}/lectures",
-    response_model=schemas.LectureResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create lecture in course",
-)
-def create_course_lecture(
-    course_id: int,
-    request_data: schemas.CourseLectureCreate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
-):
-    course = get_visible_course_or_404(
-        db,
-        course_id,
-        current_user,
-        owner_required=True,
-    )
-
-    lecture = models.Lecture(
-        course_id=course.id,
-        title=request_data.title.strip(),
-        date=request_data.date,
-        time=request_data.time,
-        class_code=None,
-        status="ACTIVE",
-        extract_status="pending",
-        analyze_status="pending",
-        total_pages=0,
-    )
-
-    try:
-        return lecture_repository.create_lecture(db, lecture)
-    except Exception as exc:
-        lecture_repository.rollback(db)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create lecture: {exc}",
         ) from exc
 
 

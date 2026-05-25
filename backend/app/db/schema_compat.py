@@ -43,6 +43,7 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
                     )
                 )
 
+<<<<<<< HEAD
         if "concepts" in table_names:
             concept_columns = {
                 column["name"]
@@ -64,6 +65,15 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
             }
             if "image_paths" not in page_content_columns:
                 connection.execute(text("ALTER TABLE page_contents ADD COLUMN image_paths TEXT"))
+=======
+        if "anonymous_questions" in table_names:
+            anonymous_question_columns = {
+                column["name"]
+                for column in inspector.get_columns("anonymous_questions")
+            }
+            if "user_id" not in anonymous_question_columns:
+                connection.execute(text("ALTER TABLE anonymous_questions ADD COLUMN user_id INTEGER"))
+>>>>>>> origin/main
 
         if "quizzes" not in table_names:
             return

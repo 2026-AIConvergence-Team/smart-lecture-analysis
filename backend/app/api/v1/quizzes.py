@@ -11,9 +11,11 @@ from app.db.session import get_db
 from app.repositories import (
     concept_repository,
     lecture_repository,
+    memo_repository,
     quiz_generation_job_repository,
     quiz_repository,
     quiz_set_repository,
+    submission_repository,
 )
 from app.services.quiz.quiz_generation import (
     AI_BATCH_SIZE,
@@ -867,6 +869,136 @@ def get_lecture_quiz_sets(
     }
 
 
+@router.post(
+    "/api/lectures/{lecture_id}/quiz-sets/{set_id}/submissions",
+    response_model=schemas.SubmissionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Submit answers for a lecture quiz set",
+)
+def submit_quiz_set_answers(
+    lecture_id: int,
+    set_id: int,
+    request_data: schemas.QuizSetSubmissionCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if current_user.role != "student":
+        return error_response(
+            status.HTTP_403_FORBIDDEN,
+            "Only students can submit quiz answers.",
+        )
+
+    lecture, error = get_lecture_or_404(db, lecture_id)
+    if error:
+        return error
+
+    quiz_set = quiz_set_repository.get_quiz_set_by_id(db, set_id)
+    if not quiz_set or quiz_set.lecture_id != lecture.id:
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "Quiz set not found for this lecture.",
+        )
+
+    if quiz_set.status != "SENT":
+        return error_response(
+            status.HTTP_400_BAD_REQUEST,
+            "Quiz set must be SENT before submitting answers.",
+        )
+
+    existing_submission = submission_repository.get_submission_by_set_and_student(
+        db,
+        set_id,
+        current_user.id,
+    )
+    if existing_submission:
+        return error_response(
+            status.HTTP_409_CONFLICT,
+            "Answers have already been submitted for this quiz set.",
+        )
+
+    quizzes = quiz_repository.get_lecture_quizzes(
+        db=db,
+        lecture_id=lecture.id,
+        quiz_status="READY",
+        set_id=set_id,
+    )
+    if not quizzes:
+        return error_response(
+            status.HTTP_400_BAD_REQUEST,
+            "No READY quizzes exist in this quiz set.",
+        )
+
+    quiz_map = {quiz.id: quiz for quiz in quizzes}
+    expected_quiz_ids = set(quiz_map.keys())
+    submitted_quiz_ids = [answer.quiz_id for answer in request_data.answers]
+
+    if len(submitted_quiz_ids) != len(set(submitted_quiz_ids)):
+        return error_response(
+            status.HTTP_400_BAD_REQUEST,
+            "Duplicate quiz_id values are not allowed.",
+        )
+
+    submitted_quiz_id_set = set(submitted_quiz_ids)
+    unknown_quiz_ids = submitted_quiz_id_set - expected_quiz_ids
+    missing_quiz_ids = expected_quiz_ids - submitted_quiz_id_set
+
+    if unknown_quiz_ids:
+        return error_response(
+            status.HTTP_400_BAD_REQUEST,
+            f"quiz_id values do not belong to this quiz set: {sorted(unknown_quiz_ids)}",
+        )
+
+    if missing_quiz_ids:
+        return error_response(
+            status.HTTP_400_BAD_REQUEST,
+            f"Answers are required for every quiz in the set. Missing quiz_id values: {sorted(missing_quiz_ids)}",
+        )
+
+    answer_rows = []
+    for answer in request_data.answers:
+        selected = answer.selected.strip()
+        if not selected:
+            return error_response(
+                status.HTTP_400_BAD_REQUEST,
+                "selected is required for every answer.",
+            )
+
+        quiz = quiz_map[answer.quiz_id]
+        is_correct = selected == str(quiz.answer or "").strip()
+        answer_rows.append(
+            {
+                "quiz_id": quiz.id,
+                "selected": selected,
+                "is_correct": is_correct,
+            }
+        )
+
+    try:
+        submission, saved_answers = submission_repository.create_submission_with_answers(
+            db=db,
+            set_id=quiz_set.id,
+            student_id=current_user.id,
+            answers=answer_rows,
+        )
+    except Exception as exc:
+        submission_repository.rollback(db)
+        return error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Failed to submit answers: {exc}",
+        )
+
+    return {
+        "id": submission.id,
+        "set_id": submission.set_id,
+        "lecture_id": lecture.id,
+        "student_id": submission.student_id,
+        "submitted_at": submission.submitted_at,
+        "answers": saved_answers,
+        "total_count": len(saved_answers),
+        "correct_count": sum(1 for answer in saved_answers if answer.is_correct),
+    }
+
+
 @router.patch(
     "/api/quiz-sets/{set_id}/status",
     status_code=status.HTTP_200_OK,
@@ -924,8 +1056,138 @@ def get_quiz_detail(
     return quiz_to_response_dict(quiz, concept)
 
 
+def get_closed_quiz_for_memo(db: Session, quiz_id: int):
+    quiz, error = get_quiz_or_404(db, quiz_id)
+    if error:
+        return None, error
+
+    if quiz.status == "DELETED":
+        return None, error_response(
+            status.HTTP_400_BAD_REQUEST,
+            "Deleted quizzes cannot have memos.",
+        )
+
+    lecture, error = get_lecture_or_404(db, quiz.lecture_id)
+    if error:
+        return None, error
+
+    if quiz.set_id is not None:
+        quiz_set = quiz_set_repository.get_quiz_set_by_id(db, quiz.set_id)
+        if not quiz_set or quiz_set.lecture_id != quiz.lecture_id:
+            return None, error_response(
+                status.HTTP_404_NOT_FOUND,
+                "Quiz set not found for this quiz.",
+            )
+
+        if quiz_set.status != "CLOSED":
+            return None, error_response(
+                status.HTTP_400_BAD_REQUEST,
+                "Quiz set must be CLOSED before saving a memo.",
+            )
+    elif lecture.status != "ENDED":
+        return None, error_response(
+            status.HTTP_400_BAD_REQUEST,
+            "Lecture must be ENDED before saving a memo for this quiz.",
+        )
+
+    return quiz, None
+
+
+@router.post(
+    "/api/quizzes/{quiz_id}/memo",
+    response_model=schemas.MemoResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Create or update memo for a closed quiz",
+)
+def upsert_quiz_memo(
+    quiz_id: int,
+    request_data: schemas.MemoCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if current_user.role != "student":
+        return error_response(
+            status.HTTP_403_FORBIDDEN,
+            "Only students can create quiz memos.",
+        )
+
+    quiz, error = get_closed_quiz_for_memo(db, quiz_id)
+    if error:
+        return error
+
+    content = request_data.content.strip()
+    if not content:
+        return error_response(
+            status.HTTP_400_BAD_REQUEST,
+            "content is required.",
+        )
+
+    try:
+        return memo_repository.upsert_memo(
+            db=db,
+            quiz_id=quiz.id,
+            student_id=current_user.id,
+            content=content,
+        )
+    except Exception as exc:
+        memo_repository.rollback(db)
+        return error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Failed to save memo: {exc}",
+        )
+
+
+@router.patch(
+    "/api/quizzes/{quiz_id}/memo",
+    response_model=schemas.MemoResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update memo for a closed quiz",
+)
+def update_quiz_memo(
+    quiz_id: int,
+    request_data: schemas.MemoUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if current_user.role != "student":
+        return error_response(
+            status.HTTP_403_FORBIDDEN,
+            "Only students can update quiz memos.",
+        )
+
+    quiz, error = get_closed_quiz_for_memo(db, quiz_id)
+    if error:
+        return error
+
+    memo = memo_repository.get_memo(db, quiz.id, current_user.id)
+    if not memo:
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "Memo not found for this quiz.",
+        )
+
+    content = request_data.content.strip()
+    if not content:
+        return error_response(
+            status.HTTP_400_BAD_REQUEST,
+            "content is required.",
+        )
+
+    memo.content = content
+
+    try:
+        return memo_repository.save_memo(db, memo)
+    except Exception as exc:
+        memo_repository.rollback(db)
+        return error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Failed to update memo: {exc}",
+        )
+
+
 @router.post(
     "/api/quiz-sets/{set_id}/quizzes/{quiz_id}/regenerate",
+    response_model=schemas.QuizMutationResponse,
     status_code=status.HTTP_200_OK,
     summary="Regenerate one quiz in a quiz set",
 )
@@ -1029,6 +1291,16 @@ def regenerate_quiz(
     quiz_repository.save_quiz(db, quiz)
 
     response = quiz_to_response_dict(quiz, concept)
+    response["updated_fields"] = [
+        "quiz_type",
+        "question",
+        "options",
+        "answer",
+        "explanation",
+        "source_sentence",
+        "page",
+        "status",
+    ]
     response["ai_used"] = ai_used
     response["rejected_count"] = rejected_count
     response["message"] = "퀴즈가 재생성되었습니다."
@@ -1037,6 +1309,7 @@ def regenerate_quiz(
 
 @router.patch(
     "/api/quiz-sets/{set_id}/quizzes/{quiz_id}",
+    response_model=schemas.QuizMutationResponse,
     status_code=status.HTTP_200_OK,
     summary="Update quiz in a quiz set",
 )
@@ -1057,6 +1330,8 @@ def update_quiz(
             "삭제된 퀴즈는 수정할 수 없습니다.",
         )
 
+    updated_fields = []
+
     if request_data.question is not None:
         if not request_data.question.strip():
             return error_response(
@@ -1064,6 +1339,7 @@ def update_quiz(
                 "question은 필수값입니다.",
             )
         quiz.question = request_data.question.strip()
+        updated_fields.append("question")
 
     if request_data.options is not None:
         options = [
@@ -1079,6 +1355,7 @@ def update_quiz(
             return validation_error
 
         quiz.options = json.dumps(options, ensure_ascii=False)
+        updated_fields.append("options")
 
     if request_data.answer is not None:
         current_options = deserialize_options(quiz.options)
@@ -1090,9 +1367,11 @@ def update_quiz(
             return validation_error
 
         quiz.answer = request_data.answer
+        updated_fields.append("answer")
 
     if request_data.explanation is not None:
         quiz.explanation = request_data.explanation
+        updated_fields.append("explanation")
 
     if request_data.status is not None:
         normalized_status = normalize_quiz_status(request_data.status)
@@ -1110,6 +1389,7 @@ def update_quiz(
                 return ready_error
 
         quiz.status = normalized_status
+        updated_fields.append("status")
 
     quiz_repository.save_quiz(db, quiz)
 
@@ -1117,7 +1397,16 @@ def update_quiz(
     if quiz.concept_id:
         concept = concept_repository.get_concept_by_id(db, quiz.concept_id)
 
-    return quiz_to_response_dict(quiz, concept)
+    response = quiz_to_response_dict(quiz, concept)
+    response["updated_fields"] = updated_fields
+    response["ai_used"] = None
+    response["rejected_count"] = None
+    response["message"] = (
+        "Quiz updated."
+        if updated_fields
+        else "No quiz fields were changed."
+    )
+    return response
 
 
 @router.delete(
