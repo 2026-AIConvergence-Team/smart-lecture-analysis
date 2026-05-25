@@ -1,7 +1,13 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 
 function useBroadcastChannel(channelName, onMessage) {
   const channelRef = useRef(null);
+  const onMessageRef = useRef(onMessage);
+
+  // Keep ref current without triggering channel reconnect
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  });
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.BroadcastChannel) {
@@ -13,19 +19,18 @@ function useBroadcastChannel(channelName, onMessage) {
     channelRef.current = channel;
 
     channel.onmessage = (event) => {
-      onMessage?.(event.data);
+      onMessageRef.current?.(event.data);
     };
 
     return () => {
       channel.close();
+      channelRef.current = null;
     };
-  }, [channelName, onMessage]);
+  }, [channelName]);
 
-  const emit = (type, payload) => {
-    if (channelRef.current) {
-      channelRef.current.postMessage({ type, payload });
-    }
-  };
+  const emit = useCallback((type, payload) => {
+    channelRef.current?.postMessage({ type, payload });
+  }, []);
 
   return emit;
 }

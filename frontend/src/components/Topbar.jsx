@@ -1,5 +1,6 @@
 import { ArrowLeft, LogOut } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
+import { logout } from "../api/authApi.js";
 
 function Topbar({ role = "teacher" }) {
   const navigate = useNavigate();
@@ -29,9 +30,18 @@ function Topbar({ role = "teacher" }) {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("access_token");
-    navigate("/login");
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch {
+      // 토큰 만료 등 실패해도 로그아웃 처리
+    } finally {
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("user_role");
+      localStorage.removeItem("user_name");
+      localStorage.removeItem("user_email");
+      navigate("/login");
+    }
   };
 
   const showBackBtn = !location.pathname.includes("/courses") || location.pathname.includes("/setup");
