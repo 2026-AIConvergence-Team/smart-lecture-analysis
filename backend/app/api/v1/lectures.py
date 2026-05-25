@@ -322,7 +322,9 @@ def get_lecture_concepts(
             "concept_name": c.concept_name,
             "page_num": c.page_num,
             "keywords": c.keywords.split(",") if c.keywords else [],
-            "sentences": json.loads(c.sentences) if c.sentences else []
+            "sentences": json.loads(c.sentences) if c.sentences else [],
+            "image_paths": json.loads(c.image_paths) if c.image_paths else [],
+            "image_descriptions": json.loads(c.image_descriptions) if c.image_descriptions else [],
         })
 
     return JSONResponse(

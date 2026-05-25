@@ -94,6 +94,8 @@ class ConceptDetail(BaseModel):
     page: int
     keywords: List[str]
     sentences: List[str]
+    image_paths: List[str] = []
+    image_descriptions: List[str] = []
 
 
 # 10. 개념 목록 조회 최종 Response
