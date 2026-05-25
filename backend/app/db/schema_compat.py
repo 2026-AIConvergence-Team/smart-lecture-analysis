@@ -43,6 +43,28 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
                     )
                 )
 
+        if "concepts" in table_names:
+            concept_columns = {
+                column["name"]
+                for column in inspector.get_columns("concepts")
+            }
+            if "image_path" not in concept_columns:
+                connection.execute(text("ALTER TABLE concepts ADD COLUMN image_path VARCHAR"))
+            if "image_description" not in concept_columns:
+                connection.execute(text("ALTER TABLE concepts ADD COLUMN image_description TEXT"))
+            if "image_paths" not in concept_columns:
+                connection.execute(text("ALTER TABLE concepts ADD COLUMN image_paths TEXT"))
+            if "image_descriptions" not in concept_columns:
+                connection.execute(text("ALTER TABLE concepts ADD COLUMN image_descriptions TEXT"))
+
+        if "page_contents" in table_names:
+            page_content_columns = {
+                column["name"]
+                for column in inspector.get_columns("page_contents")
+            }
+            if "image_paths" not in page_content_columns:
+                connection.execute(text("ALTER TABLE page_contents ADD COLUMN image_paths TEXT"))
+
         if "quizzes" not in table_names:
             return
 
