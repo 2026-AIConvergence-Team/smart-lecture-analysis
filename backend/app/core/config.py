@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
     GROQ_MODEL: str = "openai/gpt-oss-20b"
 
+    # Image description AI settings
+    IMAGE_DESCRIPTION_ENABLED: bool = False
+    IMAGE_DESCRIPTION_MAX_TOKENS: int = 512
+
     AI_QUIZ_TIMEOUT_SECONDS: int = 30
     AI_QUIZ_MAX_TOKENS: Optional[int] = 2048
 
