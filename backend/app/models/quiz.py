@@ -45,8 +45,6 @@ class Quiz(Base):
 
     question = Column(Text, nullable=False)
 
-    # SQLite 호환을 위해 JSON 문자열로 저장합니다.
-    # 예: ["LIFO", "FIFO", "push", "pop"]
     options = Column(Text, nullable=False)
 
     answer = Column(Text, nullable=False)
