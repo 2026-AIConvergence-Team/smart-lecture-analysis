@@ -81,6 +81,17 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
             for column in inspector.get_columns("quizzes")
         }
 
+        if "status" in quiz_columns:
+            connection.execute(
+                text(
+                    """
+                    UPDATE quizzes
+                    SET status = 'ACTIVE'
+                    WHERE status IN ('DRAFT', 'READY')
+                    """
+                )
+            )
+
         if "set_id" not in quiz_columns:
             connection.execute(text("ALTER TABLE quizzes ADD COLUMN set_id INTEGER"))
 

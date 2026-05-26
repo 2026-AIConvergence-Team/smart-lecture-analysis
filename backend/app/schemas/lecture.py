@@ -41,10 +41,12 @@ class LectureJoinResponse(BaseModel):
 
     participant_id: int
     lecture_id: int
+    course_id: Optional[int] = None
     user_id: int
     joined_at: datetime
     class_code: str
     already_joined: bool = False
+    course_already_joined: bool = False
 
 
 class LectureStatusUpdateRequest(BaseModel):
