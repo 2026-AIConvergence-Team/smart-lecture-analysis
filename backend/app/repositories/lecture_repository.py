@@ -24,6 +24,22 @@ def get_lectures_by_course(db: Session, course_id: int):
     )
 
 
+def get_joined_lectures_by_course(db: Session, course_id: int, user_id: int):
+    return (
+        db.query(models.Lecture)
+        .join(
+            models.LectureParticipant,
+            models.LectureParticipant.lecture_id == models.Lecture.id,
+        )
+        .filter(
+            models.Lecture.course_id == course_id,
+            models.LectureParticipant.user_id == user_id,
+        )
+        .order_by(models.Lecture.date.asc(), models.Lecture.time.asc(), models.Lecture.id.asc())
+        .all()
+    )
+
+
 def create_lecture(db: Session, lecture: models.Lecture):
     db.add(lecture)
     db.commit()

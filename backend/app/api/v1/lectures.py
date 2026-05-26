@@ -24,7 +24,10 @@ from app.services.lecture.lecture_processing import (
 import app.models as models
 import app.schemas as schemas
 
-router = APIRouter(prefix="/api/lectures", tags=["Lectures"])
+router = APIRouter(prefix="/api/lectures")
+TEACHER_LECTURE_TAG = "Teacher Lectures"
+STUDENT_LECTURE_TAG = "Student Lectures"
+SHARED_LECTURE_TAG = "Shared Lectures"
 CLASS_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 CLASS_CODE_LENGTH = 6
 
@@ -74,6 +77,81 @@ def generate_unique_class_code(db: Session) -> str:
     raise RuntimeError("Failed to generate unique class code.")
 
 
+def join_current_user_to_lecture(
+    db: Session,
+    lecture: models.Lecture,
+    current_user: models.User,
+) -> dict | JSONResponse:
+    if current_user.role != "student":
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"error": "Only students can join lectures."},
+        )
+
+    if lecture.status != "ACTIVE":
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Lecture is not active."},
+        )
+
+    if not lecture.class_code:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Class code has not been created."},
+        )
+
+    course_already_joined = (
+        lecture.course_id is not None
+        and course_repository.student_has_joined_course(
+            db,
+            lecture.course_id,
+            current_user.id,
+        )
+    )
+
+    participant = lecture_participant_repository.get_participant(
+        db,
+        lecture.id,
+        current_user.id,
+    )
+    already_joined = participant is not None
+
+    if participant is None:
+        participant = models.LectureParticipant(
+            lecture_id=lecture.id,
+            user_id=current_user.id,
+        )
+        try:
+            participant = lecture_participant_repository.create_participant(
+                db,
+                participant,
+            )
+        except Exception as e:
+            lecture_participant_repository.rollback(db)
+            participant = lecture_participant_repository.get_participant(
+                db,
+                lecture.id,
+                current_user.id,
+            )
+            if participant is None:
+                return JSONResponse(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"error": f"Failed to join lecture: {str(e)}"},
+                )
+            already_joined = True
+
+    return {
+        "participant_id": participant.id,
+        "lecture_id": lecture.id,
+        "course_id": lecture.course_id,
+        "user_id": current_user.id,
+        "joined_at": participant.joined_at,
+        "class_code": lecture.class_code,
+        "already_joined": already_joined,
+        "course_already_joined": course_already_joined,
+    }
+
+
 def question_to_response(
     question: models.AnonymousQuestion,
     author: models.User | None,
@@ -99,7 +177,8 @@ def question_to_response(
     "", 
     response_model=schemas.LectureResponse, 
     status_code=status.HTTP_201_CREATED,
-    summary="Create lecture session"
+    summary="Create lecture session",
+    tags=[TEACHER_LECTURE_TAG],
 )
 def create_lecture(
     request_data: schemas.LectureCreate, 
@@ -153,6 +232,7 @@ def create_lecture(
     response_model=schemas.LectureCodeResponse,
     status_code=status.HTTP_200_OK,
     summary="Create lecture class code",
+    tags=[TEACHER_LECTURE_TAG],
 )
 def create_lecture_code(
     lecture_id: int,
@@ -187,87 +267,35 @@ def create_lecture_code(
 
 
 @router.post(
-    "/{lecture_id}/join",
+    "/join",
     response_model=schemas.LectureJoinResponse,
     status_code=status.HTTP_200_OK,
     summary="Join lecture with class code",
+    tags=[STUDENT_LECTURE_TAG],
 )
-def join_lecture(
-    lecture_id: int,
+def join_lecture_by_class_code(
     request_data: schemas.LectureJoinRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    if current_user.role != "student":
+    normalized_class_code = normalize_class_code(request_data.class_code)
+    if not normalized_class_code:
         return JSONResponse(
-            status_code=status.HTTP_403_FORBIDDEN,
-            content={"error": "Only students can join lectures."},
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "class_code is required."},
         )
 
-    lecture = lecture_repository.get_lecture_by_id(db, lecture_id)
+    lecture = lecture_repository.get_lecture_by_class_code(
+        db,
+        normalized_class_code,
+    )
     if not lecture:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "Lecture not found."},
+            content={"error": "Lecture not found for this class code."},
         )
 
-    if lecture.status != "ACTIVE":
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "Lecture is not active."},
-        )
-
-    if not lecture.class_code:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "Class code has not been created."},
-        )
-
-    if normalize_class_code(request_data.class_code) != lecture.class_code:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "Invalid class code."},
-        )
-
-    participant = lecture_participant_repository.get_participant(
-        db,
-        lecture.id,
-        current_user.id,
-    )
-    already_joined = participant is not None
-
-    if participant is None:
-        participant = models.LectureParticipant(
-            lecture_id=lecture.id,
-            user_id=current_user.id,
-        )
-        try:
-            participant = lecture_participant_repository.create_participant(
-                db,
-                participant,
-            )
-        except Exception as e:
-            lecture_participant_repository.rollback(db)
-            participant = lecture_participant_repository.get_participant(
-                db,
-                lecture.id,
-                current_user.id,
-            )
-            if participant is None:
-                return JSONResponse(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    content={"error": f"Failed to join lecture: {str(e)}"},
-                )
-            already_joined = True
-
-    return {
-        "participant_id": participant.id,
-        "lecture_id": lecture.id,
-        "user_id": current_user.id,
-        "joined_at": participant.joined_at,
-        "class_code": lecture.class_code,
-        "already_joined": already_joined,
-    }
+    return join_current_user_to_lecture(db, lecture, current_user)
 
 
 @router.post(
@@ -275,6 +303,7 @@ def join_lecture(
     response_model=schemas.AnonymousQuestionResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create anonymous lecture question",
+    tags=[STUDENT_LECTURE_TAG],
 )
 def create_lecture_question(
     lecture_id: int,
@@ -315,6 +344,7 @@ def create_lecture_question(
     response_model=list[schemas.AnonymousQuestionResponse],
     status_code=status.HTTP_200_OK,
     summary="List anonymous lecture questions",
+    tags=[SHARED_LECTURE_TAG],
 )
 def list_lecture_questions(
     lecture_id: int,
@@ -341,7 +371,8 @@ def list_lecture_questions(
     "/{lecture_id}/pdf",
     response_model=schemas.PDFUploadResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Upload lecture PDF"
+    summary="Upload lecture PDF",
+    tags=[TEACHER_LECTURE_TAG],
 )
 async def upload_lecture_pdf(
     lecture_id: int,
@@ -391,7 +422,8 @@ async def upload_lecture_pdf(
 @router.post(
     "/{lecture_id}/text-extract",
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Start PDF text extraction"
+    summary="Start PDF text extraction",
+    tags=[TEACHER_LECTURE_TAG],
 )
 async def start_text_extraction(
     lecture_id: int,
@@ -438,7 +470,8 @@ async def start_text_extraction(
 @router.post(
     "/{lecture_id}/concept-extract",
     status_code=status.HTTP_200_OK,
-    summary="Extract lecture concepts via TF-IDF"
+    summary="Extract lecture concepts via TF-IDF",
+    tags=[TEACHER_LECTURE_TAG],
 )
 def extract_lecture_concepts(
     lecture_id: int,
@@ -485,7 +518,8 @@ def extract_lecture_concepts(
     "/{lecture_id}",
     response_model=schemas.LectureResponse,
     status_code=status.HTTP_200_OK,
-    summary="Get lecture status and info"
+    summary="Get lecture status and info",
+    tags=[SHARED_LECTURE_TAG],
 )
 def get_lecture_status(
     lecture_id: int,
@@ -503,6 +537,7 @@ def get_lecture_status(
     response_model=schemas.LectureResponse,
     status_code=status.HTTP_200_OK,
     summary="Update lecture session status",
+    tags=[TEACHER_LECTURE_TAG],
 )
 def update_lecture_status(
     lecture_id: int,
@@ -530,7 +565,8 @@ def update_lecture_status(
 @router.get(
     "/{lecture_id}/concepts",
     status_code=status.HTTP_200_OK,
-    summary="Get extracted concepts"
+    summary="Get extracted concepts",
+    tags=[SHARED_LECTURE_TAG],
 )
 def get_lecture_concepts(
     lecture_id: int,
