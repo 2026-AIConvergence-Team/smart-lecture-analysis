@@ -36,6 +36,15 @@ export function getLecture(lectureId) {
   return request(`/api/lectures/${lectureId}`);
 }
 
+// POST /api/lectures/join
+// { class_code } -> { participant_id, lecture_id, course_id, user_id, joined_at, class_code, already_joined, course_already_joined }
+export function joinLectureByCode(classCode) {
+  return request("/api/lectures/join", {
+    method: "POST",
+    body: JSON.stringify({ class_code: classCode }),
+  });
+}
+
 // ── PDF 업로드 ─────────────────────────────────────────
 // POST /api/lectures/{lecture_id}/pdf
 // FormData { file } → { id, file_name, pdf_url, total_pages, ... }
