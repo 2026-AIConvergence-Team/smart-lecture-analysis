@@ -15,12 +15,12 @@ class Settings(BaseSettings):
     AI_QUIZ_ENABLED: bool = False
 
     # Default provider; individual requests can override this value.
-    AI_QUIZ_PROVIDER: str = "gemini"
+    AI_QUIZ_PROVIDER: str = "groq"
 
     # Legacy AI_QUIZ_* keys are kept for existing .env files.
     AI_QUIZ_API_KEY: Optional[str] = None
-    AI_QUIZ_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai"
-    AI_QUIZ_MODEL: str = "gemini-2.5-flash-lite"
+    AI_QUIZ_BASE_URL: str = "https://api.groq.com/openai/v1"
+    AI_QUIZ_MODEL: str = "openai/gpt-oss-20b"
 
     # Gemini provider settings
     GEMINI_API_KEY: Optional[str] = None
