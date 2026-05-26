@@ -6,7 +6,7 @@ import PdfViewer from "../../components/PdfViewer.jsx";
 import { keywordsFor, quizFromKeyword, botCounts, BOT_RESP, SAMPLE_QUESTIONS } from "../../data/quizSyncMock.js";
 import useBroadcastChannel from "../../hooks/useBroadcastChannel.js";
 import { appendQuestionCache, getQuestionsCache, setPdfCache, setQuizSets, setCourseInfo, getPdfCache } from "../../data/sessionCache.js";
-import { generateQuizzes, getQuizGenerateStatus, getConcepts, getLectureQuizzes, deleteQuiz, updateQuizStatus, createManualQuiz, updateQuiz, getQuizDetail } from "../../api/lectureApi.js";
+import { generateQuizzes, getQuizGenerateStatus, getConcepts, getLectureQuizzes, deleteQuiz, updateQuizSetStatus, createManualQuiz, updateQuiz, getQuizDetail } from "../../api/lectureApi.js";
 
 const PALETTE = ["var(--brand)", "var(--warning)", "#94a3b8", "#cbd5e1"];
 
@@ -144,14 +144,17 @@ function TeacherLivePage() {
     getConcepts(lectureId)
       .then((res) => setConcepts(res.concepts || []))
       .catch(() => {});
-    getLectureQuizzes(lectureId, { status: "DRAFT" })
+    getLectureQuizzes(lectureId)
       .then((res) => {
-        const list = res.quizzes || [];
+        const draftSets = (res.sets || []).filter((set) => set.status === "DRAFT");
+        const draftSet = draftSets[draftSets.length - 1];
+        const list = draftSet?.quizzes || res.quizzes || [];
         if (list.length > 0) {
           setQuizDraft((prev) =>
             prev.length === 0
               ? list.map((q, i) => ({
                   id: q.quiz_id,
+                  setId: q.set_id || draftSet?.set_id,
                   n: i + 1,
                   keyword: q.concept || "개념",
                   type: q.quiz_type === "OX" ? "OX" : q.quiz_type === "BLANK" ? "빈칸형" : "객관식",
@@ -320,6 +323,7 @@ function TeacherLivePage() {
         const list = res.quizzes || [];
         const converted = list.map((q, i) => ({
           id: q.quiz_id,
+          setId: q.set_id || res.set_id,
           n: i + 1,
           keyword: q.concept || concepts.find((c) => c.concept_id === q.concept_id)?.concept_name || "개념",
           type: q.quiz_type === "OX" ? "OX" : q.quiz_type === "BLANK" ? "빈칸형" : "객관식",
@@ -345,8 +349,9 @@ function TeacherLivePage() {
 
   // ── 드래프트에서 개별 퀴즈 삭제 (deleteQuiz) ───────────
   const handleDeleteQuizFromDraft = (quizId) => {
+    const targetQuiz = quizDraft.find((q) => q.id === quizId);
     if (lectureId) {
-      deleteQuiz(quizId).catch((err) => console.error("퀴즈 삭제 실패:", err.message));
+      deleteQuiz(quizId, targetQuiz?.setId).catch((err) => console.error("퀴즈 삭제 실패:", err.message));
     }
     setQuizDraft((prev) => prev.filter((q) => q.id !== quizId));
   };
@@ -355,6 +360,7 @@ function TeacherLivePage() {
   const handleEditClick = (quiz) => {
     const fallback = {
       quizId: quiz.id,
+      setId: quiz.setId,
       question: quiz.question,
       options: Array.isArray(quiz.choices) ? [...quiz.choices] : [],
       answer: Array.isArray(quiz.choices) ? (quiz.choices[quiz.answer] ?? "") : "",
@@ -365,6 +371,7 @@ function TeacherLivePage() {
         .then((data) =>
           setEditForm({
             quizId: data.quiz_id,
+            setId: data.set_id || quiz.setId,
             question: data.question,
             options: Array.isArray(data.options) ? [...data.options] : [],
             answer: data.answer ?? "",
@@ -402,7 +409,7 @@ function TeacherLivePage() {
     });
 
     if (lectureId) {
-      updateQuiz(editForm.quizId, payload)
+      updateQuiz(editForm.quizId, payload, editForm.setId)
         .then((data) => {
           setQuizDraft((prev) =>
             prev.map((q) => (q.id === editForm.quizId ? applyLocal(q, data) : q))
@@ -429,7 +436,8 @@ function TeacherLivePage() {
       options: opts,
       answer: opts[manualForm.answerIdx] || opts[0],
       page: pdfPage,       // 현재 보고 있는 PDF 페이지 (필수 필드)
-      status: "DRAFT",
+      status: "ACTIVE",
+      ...(quizDraft[0]?.setId && { set_id: quizDraft[0].setId }),
       ...(manualForm.conceptId && { concept_id: Number(manualForm.conceptId) }),
       ...(manualForm.explanation?.trim() && { explanation: manualForm.explanation }),
     })
@@ -438,6 +446,7 @@ function TeacherLivePage() {
           ...prev,
           {
             id: data.quiz_id,
+            setId: data.set_id,
             n: prev.length + 1,
             keyword: "수동",
             type: "객관식",
@@ -454,21 +463,20 @@ function TeacherLivePage() {
 
   const handlePublishQuiz = () => {
     if (!quizDraft.length) return;
-    // 배포 시 모든 퀴즈 상태를 READY로 변경 (updateQuizStatus)
-    if (lectureId) {
-      quizDraft.forEach((q) =>
-        updateQuizStatus(q.id, "READY").catch((err) =>
-          console.error("상태 변경 실패:", err.message)
-        )
+    const backendSetId = quizDraft.find((q) => q.setId)?.setId;
+    if (lectureId && backendSetId) {
+      updateQuizSetStatus(backendSetId, "SENT").catch((err) =>
+        console.error("세트 상태 변경 실패:", err.message)
       );
     }
-    const id = Date.now();
+    const id = backendSetId || Date.now();
     const initialCounts = {};
     quizDraft.forEach((q) => {
       initialCounts[q.id] = botCounts(q.keyword);
     });
     const newSet = {
       id,
+      backendSetId,
       idx: sets.length + 1,
       status: "active",
       createdAt: new Date().toLocaleTimeString("ko-KR"),
@@ -490,6 +498,12 @@ function TeacherLivePage() {
 
   const handleCloseSet = (setId) => {
     setSets((prev) => prev.map((s) => (s.id === setId ? { ...s, status: "closed" } : s)));
+    const backendSetId = sets.find((s) => s.id === setId)?.backendSetId;
+    if (lectureId && backendSetId) {
+      updateQuizSetStatus(backendSetId, "CLOSED").catch((err) =>
+        console.error("세트 종료 실패:", err.message)
+      );
+    }
     if (activeSetId === setId) setActiveSetId(null);
     emit("QUIZ_CLOSED", { setId });
   };
