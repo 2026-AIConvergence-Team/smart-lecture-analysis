@@ -61,6 +61,49 @@ def get_visible_lecture(
     return lecture, None
 
 
+def get_accessible_lecture(
+    db: Session,
+    lecture_id: int,
+    current_user: models.User,
+):
+    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    if error_response:
+        return None, error_response
+
+    if current_user.role == "student":
+        participant = lecture_participant_repository.get_participant(
+            db,
+            lecture.id,
+            current_user.id,
+        )
+        if participant is None:
+            return None, JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"error": "Lecture not found."},
+            )
+    elif current_user.role != "teacher":
+        return None, JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"error": "You do not have permission to access this lecture."},
+        )
+
+    return lecture, None
+
+
+def get_teacher_owned_lecture(
+    db: Session,
+    lecture_id: int,
+    current_user: models.User,
+):
+    if current_user.role != "teacher":
+        return None, JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"error": "Only the lecture owner can access this resource."},
+        )
+
+    return get_visible_lecture(db, lecture_id, current_user)
+
+
 def normalize_class_code(class_code: str) -> str:
     return "".join(str(class_code or "").upper().split())
 
@@ -169,6 +212,17 @@ def question_to_response(
         "author_role": author.role if is_mine and author else None,
         "author_display_name": author.name if is_mine and author else "익명",
         "created_at": question.created_at,
+    }
+
+
+def concept_to_response(concept: models.Concept) -> dict:
+    return {
+        "concept_id": concept.id,
+        "lecture_id": concept.lecture_id,
+        "concept_name": concept.concept_name,
+        "page_num": concept.page_num,
+        "keywords": concept.keywords.split(",") if concept.keywords else [],
+        "sentences": json.loads(concept.sentences) if concept.sentences else [],
     }
 
 
@@ -418,26 +472,26 @@ async def upload_lecture_pdf(
         )
 
     
-# 3. POST /api/lectures/{lecture_id}/text-extract
+# 3. POST /api/lectures/{lecture_id}/pdf/analyze
 @router.post(
-    "/{lecture_id}/text-extract",
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Start PDF text extraction",
+    "/{lecture_id}/pdf/analyze",
+    status_code=status.HTTP_200_OK,
+    summary="Analyze lecture PDF",
     tags=[TEACHER_LECTURE_TAG],
 )
-async def start_text_extraction(
+def analyze_lecture_pdf(
     lecture_id: int,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    lecture, error_response = get_teacher_owned_lecture(db, lecture_id, current_user)
     if error_response:
         return error_response
 
     if not lecture.file_name:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "PDF file is required before text extraction."}
+            content={"error": "PDF file is required before analysis."}
         )
 
     file_path = f"uploads/lectures/{lecture_id}/{lecture.file_name}"
@@ -448,72 +502,55 @@ async def start_text_extraction(
         )
 
     try:
-        message = extract_pdf_text_to_page_contents(
+        text_message = extract_pdf_text_to_page_contents(
             db=db,
             lecture=lecture,
             lecture_id=lecture_id,
             file_path=file_path,
         )
 
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={"message": message}
+        page_contents = page_content_repository.get_page_contents_by_lecture(
+            db,
+            lecture_id,
         )
-    except Exception as e:
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": f"Failed to extract text: {str(e)}"}
-        )
+        if not page_contents:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"error": "No extracted page text exists."}
+            )
 
-
-# 4. POST /api/lectures/{lecture_id}/concept-extract
-@router.post(
-    "/{lecture_id}/concept-extract",
-    status_code=status.HTTP_200_OK,
-    summary="Extract lecture concepts via TF-IDF",
-    tags=[TEACHER_LECTURE_TAG],
-)
-def extract_lecture_concepts(
-    lecture_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
-    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
-    if error_response:
-        return error_response
-
-    page_contents = page_content_repository.get_page_contents_by_lecture(
-        db,
-        lecture_id,
-    )
-
-    if not page_contents:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "No extracted page text exists. Run text extraction first."}
-        )
-
-    try:
-        message = analyze_page_contents_to_concepts(
+        concept_message = analyze_page_contents_to_concepts(
             db=db,
             lecture=lecture,
             lecture_id=lecture_id,
             page_contents=page_contents,
         )
 
+        concepts = concept_repository.get_concepts_by_lecture(db, lecture_id)
+
         return JSONResponse(
             status_code=status.HTTP_200_OK,
-            content={"message": message}
+            content={
+                "lecture_id": lecture_id,
+                "status": "completed",
+                "extract_status": lecture.extract_status,
+                "analyze_status": lecture.analyze_status,
+                "messages": {
+                    "text_extraction": text_message,
+                    "concept_extraction": concept_message,
+                },
+                "concept_count": len(concepts),
+                "concepts": [concept_to_response(concept) for concept in concepts],
+            }
         )
-
     except Exception as e:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": f"Failed to extract concepts: {str(e)}"}
+            content={"error": f"Failed to analyze PDF: {str(e)}"}
         )
     
     
-# 5. GET /api/lectures/{lecture_id}
+# 4. GET /api/lectures/{lecture_id}
 @router.get(
     "/{lecture_id}",
     response_model=schemas.LectureResponse,
@@ -526,7 +563,7 @@ def get_lecture_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    lecture, error_response = get_accessible_lecture(db, lecture_id, current_user)
     if error_response:
         return error_response
     return lecture
@@ -545,7 +582,7 @@ def update_lecture_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    lecture, error_response = get_teacher_owned_lecture(db, lecture_id, current_user)
     if error_response:
         return error_response
 
@@ -561,36 +598,28 @@ def update_lecture_status(
     return lecture
 
 
-# 6. GET /api/lectures/{lecture_id}/concepts
+# 5. GET /api/lectures/{lecture_id}/concepts
 @router.get(
     "/{lecture_id}/concepts",
     status_code=status.HTTP_200_OK,
     summary="Get extracted concepts",
-    tags=[SHARED_LECTURE_TAG],
+    tags=[TEACHER_LECTURE_TAG],
 )
 def get_lecture_concepts(
     lecture_id: int,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
+    lecture, error_response = get_teacher_owned_lecture(db, lecture_id, current_user)
     if error_response:
         return error_response
 
     concepts = concept_repository.get_concepts_by_lecture(db, lecture_id)
 
-    result_list = []
-    for c in concepts:
-        result_list.append({
-            "concept_id": c.id,
-            "lecture_id": c.lecture_id,
-            "concept_name": c.concept_name,
-            "page_num": c.page_num,
-            "keywords": c.keywords.split(",") if c.keywords else [],
-            "sentences": json.loads(c.sentences) if c.sentences else []
-        })
-
     return JSONResponse(
         status_code=status.HTTP_200_OK,
-        content={"lecture_id": lecture_id, "concepts": result_list}
+        content={
+            "lecture_id": lecture_id,
+            "concepts": [concept_to_response(concept) for concept in concepts],
+        }
     )
