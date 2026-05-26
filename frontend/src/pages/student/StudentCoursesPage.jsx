@@ -1,141 +1,106 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import RoleLayout from "../../components/RoleLayout.jsx";
+import { listCourses } from "../../api/courseApi.js";
+import { joinLectureByCode } from "../../api/lectureApi.js";
 
-const DEFAULT_COURSES = [
-  { id: "ds",   year: 2026, term: "1학기", title: "자료구조론",   section: "01", students: 32, meta: "컴퓨터공학과 · 월/수 10:30", status: "live", week: 5 },
-  { id: "os",   year: 2026, term: "1학기", title: "운영체제",      section: "02", students: 28, meta: "컴퓨터공학과 · 화/목 13:30", status: "soon", week: 4 },
-  { id: "algo", year: 2026, term: "1학기", title: "알고리즘 설계", section: "01", students: 41, meta: "소프트웨어학부 · 금 09:00",   status: "idle", week: 5 },
-  { id: "db",   year: 2025, term: "2학기", title: "데이터베이스",  section: "01", students: 38, meta: "컴퓨터공학과 · 화/목 13:30", status: "done", week: 15 },
-];
+function getLectureId(lecture) {
+  return lecture?.lecture_id ?? lecture?.id;
+}
 
-const STATUS_PILL = {
-  live: <span className="status-tag pill pill-success"><span className="dot" style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981" }} />수업 중</span>,
-  soon: <span className="status-tag pill pill-warn">곧 시작</span>,
-  idle: <span className="status-tag pill pill-neutral">대기</span>,
-  done: <span className="status-tag pill pill-neutral">종료</span>,
-};
+function getCourseTerm(course) {
+  return `${course.year}년 ${course.semester}`;
+}
 
-function CodeJoinModal({ open, course, onClose, onJoin }) {
-  const [code, setCode] = useState(["", "", "", "", "", ""]);
-  const [error, setError] = useState("");
+function getCourseMeta(course) {
+  return [course.department, course.schedule].filter(Boolean).join(" · ");
+}
 
-  const handleInput = (i, val) => {
-    const upper = val.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    const next = [...code];
-    if (upper) {
-      next[i] = upper[0];
-      setCode(next);
-      setError("");
-      const nextEl = document.getElementById(`codeInput${i + 1}`);
-      if (nextEl) nextEl.focus();
-    } else {
-      next[i] = "";
-      setCode(next);
-    }
-  };
+function getCourseStatus(course) {
+  const lectures = course.lectures ?? [];
+  if (lectures.some((lecture) => lecture.status === "ACTIVE")) return "live";
+  if (lectures.length > 0) return "done";
+  return "idle";
+}
 
-  const handleKeyDown = (i, e) => {
-    if (e.key === "Backspace") {
-      const next = [...code];
-      if (next[i]) { next[i] = ""; setCode(next); }
-      else {
-        const prev = document.getElementById(`codeInput${i - 1}`);
-        if (prev) prev.focus();
-      }
-    }
-  };
+function groupByTerm(courses) {
+  return courses.reduce((groups, course) => {
+    const key = getCourseTerm(course);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(course);
+    return groups;
+  }, {});
+}
 
-  const handleClose = () => {
-    setCode(["", "", "", "", "", ""]);
-    setError("");
-    onClose();
-  };
+function StatusPill({ status }) {
+  if (status === "live") {
+    return (
+      <span className="status-tag pill pill-success">
+        <span className="dot" style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981" }} />
+        진행 중
+      </span>
+    );
+  }
 
-  const fullCode = code.join("");
+  if (status === "done") {
+    return <span className="status-tag pill pill-neutral">참여 완료</span>;
+  }
+
+  return <span className="status-tag pill pill-neutral">대기</span>;
+}
+
+function CodeJoinModal({ open, onClose, onJoin, joining, error }) {
+  const [code, setCode] = useState("");
+
+  useEffect(() => {
+    if (!open) setCode("");
+  }, [open]);
+
+  if (!open) return null;
+
+  const normalizedCode = code.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
 
   return (
-    <div
-      className={`modal-backdrop${open ? " open" : ""}`}
-      id="codeJoinModal"
-      onClick={(e) => e.target.id === "codeJoinModal" && handleClose()}
-    >
-      <div className="modal" style={{ position: "relative", maxWidth: 480 }}>
-        {/* Close button */}
-        <button
-          className="modal-close"
-          type="button"
-          onClick={handleClose}
-          style={{
-            position: "absolute", top: 16, right: 16,
-            background: "none", border: "none", cursor: "pointer",
-            color: "var(--zinc-400)", padding: 4, borderRadius: 6,
-            display: "grid", placeItems: "center",
-          }}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
-
-        {/* Header */}
-        <div className="modal-head" style={{ textAlign: "center", paddingBottom: 6 }}>
-          <div style={{
-            width: 54, height: 54, margin: "0 auto 12px",
-            borderRadius: 14, background: "var(--brand-soft)",
-            display: "grid", placeItems: "center",
-          }}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--brand)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="7.5" cy="15.5" r="5.5"/>
-              <path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>
-            </svg>
-          </div>
-          <h3 style={{ fontSize: 18, fontWeight: 700, color: "var(--zinc-900)", margin: 0 }}>
-            {course?.title || "강의"} 강의실 입장
-          </h3>
-          <p style={{ marginTop: 6, fontSize: 13, color: "var(--zinc-500)" }}>
-            교수님이 띄운 6자리 수업 코드를 입력하세요
-          </p>
+    <div className="modal-backdrop open" id="codeJoinModal" onClick={(event) => event.target.id === "codeJoinModal" && onClose()}>
+      <div className="modal" style={{ maxWidth: 460 }}>
+        <div className="modal-head" style={{ textAlign: "center" }}>
+          <h3>수업 코드로 참여</h3>
+          <p>교수가 공유한 6자리 수업 코드를 입력하세요.</p>
         </div>
 
-        {/* Code inputs */}
         <div className="modal-body">
-          <div className="code-entry" id="cjCodeEntry">
-            {code.map((v, i) => (
-              <input
-                key={i}
-                id={`codeInput${i}`}
-                type="text"
-                maxLength={1}
-                value={v}
-                autoFocus={i === 0 && open}
-                onChange={(e) => handleInput(i, e.target.value)}
-                onKeyDown={(e) => handleKeyDown(i, e)}
-              />
-            ))}
-          </div>
-          <p style={{
-            marginTop: 14, fontSize: 12,
-            color: "var(--danger)", textAlign: "center", minHeight: 14,
-          }}>
+          <input
+            className="input"
+            value={normalizedCode}
+            autoFocus
+            maxLength={6}
+            placeholder="ABC123"
+            onChange={(event) => setCode(event.target.value)}
+            style={{
+              height: 52,
+              textAlign: "center",
+              fontSize: 24,
+              fontWeight: 700,
+              letterSpacing: 0,
+              fontFamily: "JetBrains Mono, monospace",
+            }}
+          />
+          <p style={{ marginTop: 12, minHeight: 18, color: "var(--danger)", fontSize: 13, textAlign: "center" }}>
             {error}
           </p>
         </div>
 
-        {/* Footer */}
         <div className="modal-foot">
-          <button className="btn btn-ghost" type="button" onClick={handleClose}>취소</button>
+          <button className="btn btn-ghost" type="button" onClick={onClose} disabled={joining}>
+            취소
+          </button>
           <button
             className="btn btn-primary"
             type="button"
-            disabled={fullCode.length < 6}
-            onClick={() => { onJoin(fullCode); setCode(["", "", "", "", "", ""]); setError(""); }}
+            disabled={joining || normalizedCode.length < 6}
+            onClick={() => onJoin(normalizedCode)}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
-              <polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
-            </svg>
-            입장하기
+            {joining ? "참여 중..." : "참여하기"}
           </button>
         </div>
       </div>
@@ -145,41 +110,84 @@ function CodeJoinModal({ open, course, onClose, onJoin }) {
 
 function StudentCoursesPage() {
   const navigate = useNavigate();
-  const [modalCourse, setModalCourse] = useState(null);
+  const [courses, setCourses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [joinOpen, setJoinOpen] = useState(false);
+  const [joinError, setJoinError] = useState("");
+  const [joining, setJoining] = useState(false);
 
-  const active = DEFAULT_COURSES.filter((c) => c.status !== "done");
-  const past   = DEFAULT_COURSES.filter((c) => c.status === "done");
+  const groupedCourses = useMemo(() => groupByTerm(courses), [courses]);
 
-  const handleCardClick = (c) => {
-    if (c.status === "done") {
-      navigate("/student/review");
-    } else if (c.status === "live") {
-      setModalCourse(c);
+  const loadCourses = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setCourses(await listCourses());
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleJoin = (code) => {
-    setModalCourse(null);
-    navigate("/student/live");
+  useEffect(() => {
+    loadCourses();
+  }, []);
+
+  const handleJoin = async (classCode) => {
+    setJoining(true);
+    setJoinError("");
+    try {
+      const joined = await joinLectureByCode(classCode);
+      setJoinOpen(false);
+      await loadCourses();
+      navigate("/student/live", {
+        state: {
+          courseId: joined.course_id,
+          lectureId: joined.lecture_id,
+        },
+      });
+    } catch (err) {
+      setJoinError(err.message);
+    } finally {
+      setJoining(false);
+    }
   };
 
-  const renderCard = (c) => {
-    const cta = c.status === "live"
-      ? <span style={{ color: "var(--brand-deep)", fontWeight: 600 }}>강의실 입장 →</span>
-      : c.status === "done"
-        ? <span style={{ color: "var(--brand-deep)", fontWeight: 600 }}>복습 →</span>
-        : <span style={{ color: "var(--zinc-500)", fontWeight: 600 }}>곧 시작</span>;
+  const handleCourseClick = (course) => {
+    const lectures = course.lectures ?? [];
+    const activeLecture = lectures.find((lecture) => lecture.status === "ACTIVE") ?? lectures[lectures.length - 1];
+
+    if (!activeLecture) return;
+
+    navigate("/student/live", {
+      state: {
+        courseId: course.id,
+        lectureId: getLectureId(activeLecture),
+      },
+    });
+  };
+
+  const renderCourse = (course) => {
+    const status = getCourseStatus(course);
+    const lectures = course.lectures ?? [];
+    const latestLecture = lectures[lectures.length - 1];
+    const cta = status === "live" ? "입장하기" : "복습하기";
 
     return (
-      <button key={c.id} className="course-card" type="button" onClick={() => handleCardClick(c)}>
+      <button key={course.id} className="course-card" type="button" onClick={() => handleCourseClick(course)}>
         <div>
-          <div className="title">{c.title}</div>
-          <div className="term">{c.meta}</div>
+          <div className="title">{course.title}</div>
+          <div className="term">{getCourseMeta(course)}</div>
         </div>
-        {STATUS_PILL[c.status]}
+        <StatusPill status={status} />
         <div className="meta">
-          <span className="key">{c.week}주차 · 담당 김OO 교수</span>
-          {cta}
+          <span className="key">
+            {course.section}분반 · {lectures.length}개 수업
+            {latestLecture ? ` · ${latestLecture.title}` : ""}
+          </span>
+          <span style={{ color: "var(--brand-deep)", fontWeight: 600 }}>{cta}</span>
         </div>
       </button>
     );
@@ -188,41 +196,60 @@ function StudentCoursesPage() {
   return (
     <RoleLayout role="student" title="수업 목록">
       <div className="content">
-        <p className="eyebrow">My Classes</p>
-        <h1 className="page-title">내 수업</h1>
-        <p className="page-sub">수업을 선택한 뒤 교수님이 띄운 수업 코드를 입력해 강의실에 입장합니다.</p>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 24 }}>
+          <div>
+            <p className="eyebrow">My Classes</p>
+            <h1 className="page-title">내 수업</h1>
+            <p className="page-sub">처음 참여하는 수업은 교수님이 공유한 수업 코드로 입장하세요.</p>
+          </div>
+          <button className="btn btn-primary" type="button" onClick={() => setJoinOpen(true)}>
+            코드로 참여
+          </button>
+        </div>
 
-        <div style={{ marginTop: 28 }}>
-          {/* 현재 학기 */}
-          <div style={{ marginBottom: 28 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 14 }}>
-              <h2 style={{ fontSize: 14, fontWeight: 700, color: "var(--zinc-900)" }}>2026년 1학기</h2>
-              <span style={{ fontSize: 12, color: "var(--zinc-500)" }}>수강 {active.length}과목</span>
-            </div>
-            <div className="course-grid">
-              {active.map(renderCard)}
+        {error && (
+          <div className="card" style={{ marginTop: 24 }}>
+            <div className="card-pad-lg" style={{ color: "var(--danger)" }}>{error}</div>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="card" style={{ marginTop: 24 }}>
+            <div className="card-pad-lg">수업 목록을 불러오는 중...</div>
+          </div>
+        ) : courses.length === 0 ? (
+          <div className="card" style={{ marginTop: 24 }}>
+            <div className="card-pad-lg" style={{ textAlign: "center" }}>
+              <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>아직 참여한 수업이 없습니다</h3>
+              <p style={{ marginTop: 8, color: "var(--zinc-500)", fontSize: 13 }}>수업 코드를 입력하면 이 목록에 course가 추가됩니다.</p>
+              <button className="btn btn-primary" type="button" onClick={() => setJoinOpen(true)} style={{ marginTop: 18 }}>
+                코드로 참여
+              </button>
             </div>
           </div>
-
-          {/* 이전 학기 */}
-          {past.length > 0 && (
-            <div>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 14 }}>
-                <h2 style={{ fontSize: 14, fontWeight: 700, color: "var(--zinc-900)" }}>2025년 2학기</h2>
-                <span style={{ fontSize: 12, color: "var(--zinc-500)" }}>수강 {past.length}과목</span>
+        ) : (
+          <div style={{ marginTop: 28 }}>
+            {Object.entries(groupedCourses).map(([term, termCourses]) => (
+              <div key={term} style={{ marginBottom: 28 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 14 }}>
+                  <h2 style={{ fontSize: 14, fontWeight: 700, color: "var(--zinc-900)" }}>{term}</h2>
+                  <span style={{ fontSize: 12, color: "var(--zinc-500)" }}>참여 {termCourses.length}과목</span>
+                </div>
+                <div className="course-grid">{termCourses.map(renderCourse)}</div>
               </div>
-              <div className="course-grid">
-                {past.map(renderCard)}
-              </div>
-            </div>
-          )}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <CodeJoinModal
-        open={!!modalCourse}
-        course={modalCourse}
-        onClose={() => setModalCourse(null)}
+        open={joinOpen}
+        joining={joining}
+        error={joinError}
+        onClose={() => {
+          setJoinOpen(false);
+          setJoinError("");
+        }}
         onJoin={handleJoin}
       />
     </RoleLayout>
