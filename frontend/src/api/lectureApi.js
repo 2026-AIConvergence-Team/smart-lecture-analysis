@@ -14,15 +14,15 @@ async function request(path, options = {}) {
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(data?.error || data?.detail || "ìš”ì²­ ì²˜ë¦¬ ì¤‘ ì˜¤ë¥˜ê°€ ë°œìƒí–ˆìŠµë‹ˆë‹¤.");
+    throw new Error(data?.error || data?.detail || "?”ì²­ ì²˜ë¦¬ ì¤??¤ë¥˜ê°€ ë°œìƒ?ˆìŠµ?ˆë‹¤.");
   }
 
   return data;
 }
 
-// â”€â”€ ê°•ì˜ ìƒì„± â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ?€?€ ê°•ì˜ ?ì„± ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
 // POST /api/lectures
-// { title, date, time } â†’ { id, title, date, time, class_code, created_at }
+// { title, date, time } ??{ id, title, date, time, class_code, created_at }
 export function createLecture(payload) {
   return request("/api/lectures", {
     method: "POST",
@@ -30,15 +30,24 @@ export function createLecture(payload) {
   });
 }
 
-// â”€â”€ ê°•ì˜ ì¡°íšŒ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ?€?€ ê°•ì˜ ì¡°íšŒ ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
 // GET /api/lectures/{lecture_id}
 export function getLecture(lectureId) {
   return request(`/api/lectures/${lectureId}`);
 }
 
-// â”€â”€ PDF ì—…ë¡œë“œ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// POST /api/lectures/join
+// { class_code } -> { participant_id, lecture_id, course_id, user_id, joined_at, class_code, already_joined, course_already_joined }
+export function joinLectureByCode(classCode) {
+  return request("/api/lectures/join", {
+    method: "POST",
+    body: JSON.stringify({ class_code: classCode }),
+  });
+}
+
+// ?€?€ PDF ?…ë¡œ???€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
 // POST /api/lectures/{lecture_id}/pdf
-// FormData { file } â†’ { id, file_name, pdf_url, total_pages, ... }
+// FormData { file } ??{ id, file_name, pdf_url, total_pages, ... }
 export function uploadPdf(lectureId, file) {
   const token = localStorage.getItem("access_token");
   const formData = new FormData();
@@ -48,45 +57,38 @@ export function uploadPdf(lectureId, file) {
     method: "POST",
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      // Content-Typeì€ ì„¤ì •í•˜ì§€ ì•ŠìŒ â€” ë¸Œë¼ìš°ì €ê°€ multipart boundaryë¥¼ ìë™ ì„¤ì •
+      // Content-Type?€ ?¤ì •?˜ì? ?ŠìŒ ??ë¸Œë¼?°ì?ê°€ multipart boundaryë¥??ë™ ?¤ì •
     },
     body: formData,
   }).then(async (res) => {
     const data = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(data?.error || data?.detail || "PDF ì—…ë¡œë“œì— ì‹¤íŒ¨í–ˆìŠµë‹ˆë‹¤.");
+    if (!res.ok) throw new Error(data?.error || data?.detail || "PDF ?…ë¡œ?œì— ?¤íŒ¨?ˆìŠµ?ˆë‹¤.");
     return data;
   });
 }
 
-// â”€â”€ í…ìŠ¤íŠ¸ ì¶”ì¶œ ì‹œì‘ (ë™ê¸°) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// POST /api/lectures/{lecture_id}/text-extract
-// â†’ { message }
-export function extractText(lectureId) {
-  return request(`/api/lectures/${lectureId}/text-extract`, {
+// ?€?€ ?ìŠ¤??ì¶”ì¶œ ?œì‘ (?™ê¸°) ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+// POST /api/lectures/{lecture_id}/pdf/analyze
+// ??{ message }
+export function analyzePdf(lectureId) {
+  return request(`/api/lectures/${lectureId}/pdf/analyze`, {
     method: "POST",
   });
 }
 
-// â”€â”€ ê°œë… ì¶”ì¶œ (ë™ê¸°) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// POST /api/lectures/{lecture_id}/concept-extract
-// â†’ { message }
-export function extractConcepts(lectureId) {
-  return request(`/api/lectures/${lectureId}/concept-extract`, {
-    method: "POST",
-  });
-}
-
-// â”€â”€ ê°œë… ëª©ë¡ ì¡°íšŒ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ?€?€ ê°œë… ì¶”ì¶œ (?™ê¸°) ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+// ??{ message }
+// ?€?€ ê°œë… ëª©ë¡ ì¡°íšŒ ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
 // GET /api/lectures/{lecture_id}/concepts
-// â†’ { lecture_id, concepts: [{concept_id, lecture_id, concept_name, page_num, keywords, sentences}] }
+// ??{ lecture_id, concepts: [{concept_id, lecture_id, concept_name, page_num, keywords, sentences}] }
 export function getConcepts(lectureId) {
   return request(`/api/lectures/${lectureId}/concepts`);
 }
 
-// â”€â”€ ìë™ í€´ì¦ˆ ìƒì„± ì‹œì‘ (ë™ê¸°) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ?€?€ ?ë™ ?´ì¦ˆ ?ì„± ?œì‘ (?™ê¸°) ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
 // POST /api/lectures/{lecture_id}/quizzes/generate
 // { page_start, page_end, quiz_type, concept_ids?, count_per_concept?, option_count?, use_ai? }
-// â†’ { lecture_id, job_id, status: "completed", generated_count, ... }
+// ??{ lecture_id, job_id, status: "completed", generated_count, ... }
 export function generateQuizzes(lectureId, payload) {
   return request(`/api/lectures/${lectureId}/quizzes/generate`, {
     method: "POST",
@@ -94,16 +96,16 @@ export function generateQuizzes(lectureId, payload) {
   });
 }
 
-// â”€â”€ í€´ì¦ˆ ìƒì„± ìƒíƒœ + ê²°ê³¼ ì¡°íšŒ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ?€?€ ?´ì¦ˆ ?ì„± ?íƒœ + ê²°ê³¼ ì¡°íšŒ ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
 // GET /api/lectures/{lecture_id}/quizzes/generate/status
-// â†’ { lecture_id, job_id, status, progress, generated_count, quizzes: [...] }
+// ??{ lecture_id, job_id, status, progress, generated_count, quizzes: [...] }
 export function getQuizGenerateStatus(lectureId) {
   return request(`/api/lectures/${lectureId}/quizzes/generate/status`);
 }
 
-// â”€â”€ í€´ì¦ˆ ëª©ë¡ ì¡°íšŒ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// GET /api/lectures/{lecture_id}/quizzes?status=DRAFT&page_start=5&page_end=12&concept_id=1
-// â†’ { lecture_id, total_count, quizzes: [...] }
+// ?€?€ ?´ì¦ˆ ëª©ë¡ ì¡°íšŒ ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+// GET /api/lectures/{lecture_id}/quizzes?status=ACTIVE&page_start=5&page_end=12&concept_id=1
+// ??{ lecture_id, total_count, quizzes: [...] }
 export function getLectureQuizzes(lectureId, params = {}) {
   const query = new URLSearchParams();
   if (params.status)     query.append("status", params.status);
@@ -114,36 +116,42 @@ export function getLectureQuizzes(lectureId, params = {}) {
   return request(`/api/lectures/${lectureId}/quizzes${qs ? `?${qs}` : ""}`);
 }
 
-// â”€â”€ í€´ì¦ˆ ìƒì„¸ ì¡°íšŒ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ?€?€ ?´ì¦ˆ ?ì„¸ ì¡°íšŒ ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
 // GET /api/quizzes/{quiz_id}
-// â†’ { quiz_id, lecture_id, concept_id, concept, page, quiz_type, question, options, answer, ... }
+// ??{ quiz_id, lecture_id, concept_id, concept, page, quiz_type, question, options, answer, ... }
 export function getQuizDetail(quizId) {
   return request(`/api/quizzes/${quizId}`);
 }
 
-// â”€â”€ í€´ì¦ˆ ìˆ˜ì • â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ?€?€ ?´ì¦ˆ ?˜ì • ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
 // PATCH /api/quizzes/{quiz_id}
-// { question?, options?, answer?, explanation?, status? } â†’ ìˆ˜ì •ëœ í€´ì¦ˆ ì „ì²´ ë°˜í™˜
-export function updateQuiz(quizId, payload) {
-  return request(`/api/quizzes/${quizId}`, {
+// { question?, options?, answer?, explanation?, status? } ???˜ì •???´ì¦ˆ ?„ì²´ ë°˜í™˜
+export function updateQuiz(quizId, payload, setId = null) {
+  const path = setId
+    ? `/api/quiz-sets/${setId}/quizzes/${quizId}`
+    : `/api/quizzes/${quizId}`;
+  return request(path, {
     method: "PATCH",
     body: JSON.stringify(payload),
   });
 }
 
-// â”€â”€ í€´ì¦ˆ ì‚­ì œ (ì†Œí”„íŠ¸) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ?€?€ ?´ì¦ˆ ?? œ (?Œí”„?? ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
 // DELETE /api/quizzes/{quiz_id}
-// â†’ { quiz_id, previous_status, current_status: "DELETED", message }
-export function deleteQuiz(quizId) {
-  return request(`/api/quizzes/${quizId}`, {
+// ??{ quiz_id, previous_status, current_status: "DELETED", message }
+export function deleteQuiz(quizId, setId = null) {
+  const path = setId
+    ? `/api/quiz-sets/${setId}/quizzes/${quizId}`
+    : `/api/quizzes/${quizId}`;
+  return request(path, {
     method: "DELETE",
   });
 }
 
-// â”€â”€ ìˆ˜ë™ í€´ì¦ˆ ì¶”ê°€ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ?€?€ ?˜ë™ ?´ì¦ˆ ì¶”ê? ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
 // POST /api/lectures/{lecture_id}/quizzes
 // { concept_id?, quiz_type, question, options, answer, explanation?, source_sentence?, page?, status }
-// â†’ ìƒì„±ëœ í€´ì¦ˆ ì „ì²´ ë°˜í™˜
+// ???ì„±???´ì¦ˆ ?„ì²´ ë°˜í™˜
 export function createManualQuiz(lectureId, payload) {
   return request(`/api/lectures/${lectureId}/quizzes`, {
     method: "POST",
@@ -151,12 +159,24 @@ export function createManualQuiz(lectureId, payload) {
   });
 }
 
-// â”€â”€ í€´ì¦ˆ ìƒíƒœ ë³€ê²½ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ?€?€ ?´ì¦ˆ ?íƒœ ë³€ê²??€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
 // PATCH /api/quizzes/{quiz_id}/status
-// { status: "DRAFT" | "READY" | "DELETED" }
-// â†’ ìˆ˜ì •ëœ í€´ì¦ˆ ì „ì²´ ë°˜í™˜
-export function updateQuizStatus(quizId, status) {
-  return request(`/api/quizzes/${quizId}/status`, {
+// { status: "ACTIVE" | "DELETED" }
+// ???˜ì •???´ì¦ˆ ?„ì²´ ë°˜í™˜
+export function updateQuizStatus(quizId, status, setId = null) {
+  const path = setId
+    ? `/api/quiz-sets/${setId}/quizzes/${quizId}/status`
+    : `/api/quizzes/${quizId}/status`;
+  return request(path, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+// PATCH /api/quiz-sets/{set_id}/status
+// { status: "DRAFT" | "SENT" | "CLOSED" }
+export function updateQuizSetStatus(setId, status) {
+  return request(`/api/quiz-sets/${setId}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status }),
   });
