@@ -4,7 +4,7 @@ import { CloudUpload, ChevronLeft, Play, Trash2 } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import { keywordsFor, quizFromKeyword, SAMPLE_QUESTIONS } from "../../data/quizSyncMock.js";
 import { setPdfCache, clearSession } from "../../data/sessionCache.js";
-import { createLecture, uploadPdf, extractText, extractConcepts, getConcepts, generateQuizzes, getQuizGenerateStatus, generateClassCode, updateLectureStatus } from "../../api/lectureApi.js";
+import { createLecture, uploadPdf, analyzePdf, getConcepts, generateQuizzes, getQuizGenerateStatus, generateClassCode, updateLectureStatus } from "../../api/lectureApi.js";
 
 const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -78,9 +78,8 @@ function TeacherSetupPage() {
     uploadPdf(lectureId, pdfFile)
       .then((data) => {
         if (data?.total_pages) setPdfTotal(data.total_pages);
-        return extractText(lectureId);              // 텍스트 추출 (동기)
+        return analyzePdf(lectureId);                // 텍스트 추출 + 개념 추출 (통합, 동기)
       })
-      .then(() => extractConcepts(lectureId))       // 개념 추출 (동기)
       .then(() => getConcepts(lectureId))            // 개념 목록 조회
       .then((res) => {
         const list = res.concepts || [];

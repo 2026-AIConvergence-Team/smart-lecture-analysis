@@ -58,20 +58,11 @@ export function uploadPdf(lectureId, file) {
   });
 }
 
-// ── 텍스트 추출 시작 (동기) ────────────────────────────
-// POST /api/lectures/{lecture_id}/text-extract
+// ── 텍스트 추출 + 개념 추출 (통합, 동기) ─────────────
+// POST /api/lectures/{lecture_id}/pdf/analyze
 // → { message }
-export function extractText(lectureId) {
-  return request(`/api/lectures/${lectureId}/text-extract`, {
-    method: "POST",
-  });
-}
-
-// ── 개념 추출 (동기) ───────────────────────────────────
-// POST /api/lectures/{lecture_id}/concept-extract
-// → { message }
-export function extractConcepts(lectureId) {
-  return request(`/api/lectures/${lectureId}/concept-extract`, {
+export function analyzePdf(lectureId) {
+  return request(`/api/lectures/${lectureId}/pdf/analyze`, {
     method: "POST",
   });
 }
