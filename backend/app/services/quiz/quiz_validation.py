@@ -283,7 +283,7 @@ def validate_quiz_status(status_value: str) -> Optional[JSONResponse]:
     if normalize_quiz_status(status_value) not in SUPPORTED_QUIZ_STATUSES:
         return error_response(
             status.HTTP_400_BAD_REQUEST,
-            "지원하지 않는 status입니다. DRAFT, READY, DELETED 중 하나를 사용하세요.",
+            "지원하지 않는 status입니다. ACTIVE, DELETED 중 하나를 사용하세요.",
         )
     return None
 
@@ -396,13 +396,13 @@ def validate_options_and_answer(
     return None
 
 
-def validate_ready_quiz(
+def validate_active_quiz(
     question: str,
     options: List[str],
     answer: str,
 ) -> Optional[JSONResponse]:
     """
-    READY 상태로 전환하기 전에 사용자에게 노출 가능한 퀴즈인지 확인합니다.
+    ACTIVE 상태로 사용할 수 있는 퀴즈인지 확인합니다.
     """
     question_error = validate_question_text(question)
     if question_error:
