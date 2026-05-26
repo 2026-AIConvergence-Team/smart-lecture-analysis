@@ -48,6 +48,11 @@ from app.services.quiz.quiz_validation import (
     validate_quiz_type,
 )
 
+from app.constants.quiz_constants import (
+    AI_TARGET_MAX_QUIZZES,
+    AI_TARGET_MIN_QUIZZES,
+    SERVICE_MAX_QUIZ_COUNT,
+)
 
 router = APIRouter()
 TEACHER_QUIZ_TAG = "Teacher Quizzes"
@@ -68,6 +73,52 @@ def quiz_model_supports_generation_job_id() -> bool:
 def quiz_model_supports_set_id() -> bool:
     return hasattr(models.Quiz, "set_id")
 
+def infer_quiz_display_concept_from_quiz_content(quiz: models.Quiz) -> Optional[str]:
+    """
+    DB concept_name이 PDF 조각이거나, source_sentence가 여러 개념을 포함하는 경우
+    실제 문항의 question/answer/source_sentence 중심으로 표시 concept를 보정합니다.
+    """
+    text = " ".join([
+        quiz.question or "",
+        quiz.answer or "",
+        quiz.source_sentence or "",
+    ])
+
+    normalized = "".join(str(text or "").lower().split())
+
+    priority_rules = [
+        ("제로섬게임", "제로섬 게임"),
+        ("zero-sumgame", "제로섬 게임"),
+        ("zerosumgame", "제로섬 게임"),
+        ("죄수의딜레마", "죄수의 딜레마"),
+        ("prisoner", "죄수의 딜레마"),
+        ("내시균형", "내시균형"),
+        ("내쉬균형", "내쉬균형"),
+        ("nashequilibrium", "내시균형"),
+        ("파블로프", "파블로프 전략"),
+        ("pavlov", "파블로프 전략"),
+        ("맞대응", "맞대응 전략"),
+        ("tit-for-tat", "맞대응 전략"),
+        ("titfortat", "맞대응 전략"),
+        ("일회성", "일회성 게임"),
+        ("one-shot", "일회성 게임"),
+        ("oneshot", "일회성 게임"),
+        ("반복적", "반복적 게임"),
+        ("iterative", "반복적 게임"),
+        ("최상의대응", "최상의 대응"),
+        ("bestresponse", "최상의 대응"),
+        ("최적의전략", "최적의 전략"),
+        ("optimalstrategy", "최적의 전략"),
+        ("사회적의사결정", "사회적 의사결정"),
+        ("게임이론", "게임 이론"),
+    ]
+
+    for marker, label in priority_rules:
+        if marker in normalized:
+            return label
+
+    return None
+
 def get_quiz_display_concept(
     quiz: models.Quiz,
     concept: Optional[models.Concept] = None,
@@ -75,17 +126,26 @@ def get_quiz_display_concept(
     """
     퀴즈에 노출할 개념명을 결정합니다.
 
-    원문 문장에서 추론한 라벨을 우선 사용하고, 없으면 DB 개념명을 정제해 사용합니다.
+    실제 문항의 question/answer/source_sentence를 먼저 보고,
+    그 다음 DB concept를 fallback으로 사용합니다.
     """
+    inferred_from_quiz = infer_quiz_display_concept_from_quiz_content(quiz)
+    if inferred_from_quiz:
+        return inferred_from_quiz
+
+    if concept:
+        refined_label = get_concept_label(concept)
+        if refined_label:
+            return refined_label
+
+        if concept.concept_name:
+            return concept.concept_name
+
     inferred_label = infer_concept_label_from_source_sentence(
         quiz.source_sentence or ""
     )
     if inferred_label:
         return inferred_label
-
-    if concept:
-        refined_label = get_concept_label(concept)
-        return refined_label or concept.concept_name
 
     return None
 
@@ -217,6 +277,68 @@ def get_concepts_for_quiz_generation(
         concept_ids=concept_ids,
     )
 
+def get_page_context_map(
+    db: Session,
+    lecture_id: int,
+    page_start: int,
+    page_end: int,
+) -> dict[int, str]:
+    """
+    퀴즈 생성 시 concept.sentences만 쓰면 문맥이 너무 짧아져
+    AI가 '선수', '전략' 같은 단어를 잘못 해석할 수 있습니다.
+
+    PageContent 모델이 있으면 page별 원문 텍스트를 함께 넘깁니다.
+    모델명/컬럼명이 약간 달라도 최대한 안전하게 동작하도록 getattr 기반으로 처리합니다.
+    """
+    PageContent = getattr(models, "PageContent", None)
+    if PageContent is None:
+        print("[QUIZ_PAGE_CONTEXT_SKIP] reason=PageContent 모델을 찾지 못했습니다.")
+        return {}
+
+    page_num_column = getattr(PageContent, "page_num", None) or getattr(PageContent, "page", None)
+    if page_num_column is None:
+        print("[QUIZ_PAGE_CONTEXT_SKIP] reason=PageContent page_num/page 컬럼을 찾지 못했습니다.")
+        return {}
+
+    try:
+        rows = (
+            db.query(PageContent)
+            .filter(PageContent.lecture_id == lecture_id)
+            .filter(page_num_column >= page_start)
+            .filter(page_num_column <= page_end)
+            .all()
+        )
+    except Exception as exc:
+        print(f"[QUIZ_PAGE_CONTEXT_SKIP] reason=PageContent 조회 실패, error={exc}")
+        return {}
+
+    context_map: dict[int, str] = {}
+
+    for row in rows:
+        page_num = getattr(row, "page_num", None) or getattr(row, "page", None)
+        if page_num is None:
+            continue
+
+        text = (
+            getattr(row, "text", None)
+            or getattr(row, "content", None)
+            or getattr(row, "page_text", None)
+            or getattr(row, "raw_text", None)
+            or ""
+        )
+
+        text = str(text or "").strip()
+        if text:
+            context_map[int(page_num)] = text
+
+    print(
+        "[QUIZ_PAGE_CONTEXT_RESULT] "
+        f"lecture_id={lecture_id}, "
+        f"pages={len(context_map)}, "
+        f"page_range={page_start}-{page_end}"
+    )
+
+    return context_map
 
 def get_latest_job_quizzes_query(
     db: Session,
@@ -232,69 +354,6 @@ def get_latest_job_quizzes_query(
         latest_job=latest_job,
         quiz_set=quiz_set_repository.get_quiz_set_by_job_id(db, latest_job.id),
     )
-
-def refill_quality_quizzes(
-    quality_quizzes: list[dict],
-    target_concepts: list[models.Concept],
-    quiz_type: str,
-    count_per_concept: int,
-    option_count: int,
-    target_quiz_count: int,
-) -> tuple[list[dict], int]:
-    """
-    품질 검사를 통과한 문항이 부족하면 알고리즘 생성 문항으로 보충합니다.
-    중복 질문과 동일 개념-유형 조합은 제외하며, 최종 문항 수는 목표 수를 넘지 않습니다.
-    """
-    if len(quality_quizzes) >= target_quiz_count:
-        return quality_quizzes, 0
-
-    existing_questions = {
-        str(quiz.get("question") or "")
-        for quiz in quality_quizzes
-    }
-
-    existing_concept_type_pairs = {
-        (quiz.get("concept_id"), quiz.get("quiz_type"))
-        for quiz in quality_quizzes
-    }
-
-    refill_candidates, _ = generate_quizzes_for_concepts(
-        concepts=target_concepts,
-        all_lecture_concepts=target_concepts,
-        quiz_type=quiz_type,
-        count_per_concept=max(2, count_per_concept + 1),
-        option_count=option_count,
-    )
-
-    refill_rejected_count = 0
-
-    for candidate in refill_candidates:
-        if len(quality_quizzes) >= target_quiz_count:
-            break
-
-        question = str(candidate.get("question") or "")
-        concept_type_pair = (candidate.get("concept_id"), candidate.get("quiz_type"))
-
-        if question in existing_questions:
-            continue
-
-        if concept_type_pair in existing_concept_type_pairs:
-            continue
-
-        passed, rejected = filter_quality_quizzes(
-            [candidate],
-            option_count=option_count,
-        )
-        refill_rejected_count += rejected
-
-        if not passed:
-            continue
-
-        quality_quizzes.append(passed[0])
-        existing_questions.add(question)
-        existing_concept_type_pairs.add(concept_type_pair)
-
-    return quality_quizzes, refill_rejected_count
 
 
 @router.post(
@@ -339,6 +398,12 @@ def generate_lecture_quizzes(
             "페이지 범위가 PDF 전체 페이지 수를 초과합니다.",
         )
 
+    if not request_data.use_ai:
+        return error_response(
+            status.HTTP_400_BAD_REQUEST,
+            "현재 퀴즈 생성은 AI 생성 방식만 지원합니다. use_ai=true로 요청하세요.",
+        )
+
     running_job = quiz_generation_job_repository.get_running_job_for_lecture(
         db,
         lecture_id,
@@ -372,7 +437,6 @@ def generate_lecture_quizzes(
             "해당 범위에서 퀴즈를 생성할 수 있는 개념을 찾지 못했습니다.",
         )
 
-    # 페이지 범위와 사용 가능한 개념 수를 기준으로 생성 목표 문항 수를 계산합니다.
     target_quiz_count = calculate_target_quiz_count(
         page_start=request_data.page_start,
         page_end=request_data.page_end,
@@ -385,11 +449,25 @@ def generate_lecture_quizzes(
             "해당 범위에서 퀴즈를 생성할 수 있는 충분한 개념을 찾지 못했습니다.",
         )
 
-
+    # AI batch에 넘길 최대 목표 수.
+    # 최종 저장 수는 target_quiz_count를 넘지 않도록 아래에서 다시 자릅니다.
     internal_target_max = min(
+        SERVICE_MAX_QUIZ_COUNT,
+        AI_TARGET_MAX_QUIZZES,
         len(target_concepts),
-        target_quiz_count + 1,
+        max(target_quiz_count + 2, target_quiz_count),
     )
+
+    # target_min이 target_max보다 커지면 AI batch가 비현실적인 목표를 갖게 되므로 보정합니다.
+    internal_target_min = min(
+        AI_TARGET_MIN_QUIZZES,
+        internal_target_max,
+        target_quiz_count,
+    )
+
+    # 그래도 최소 1개는 시도합니다.
+    internal_target_max = max(1, internal_target_max)
+    internal_target_min = max(1, internal_target_min)
 
     job = models.QuizGenerationJob(
         lecture_id=lecture_id,
@@ -400,172 +478,79 @@ def generate_lecture_quizzes(
         quiz_type=quiz_type,
         generated_count=0,
         failed_count=0,
-        message="퀴즈 생성을 시작했습니다.",
+        message="AI 퀴즈 생성을 시작했습니다.",
     )
 
     quiz_generation_job_repository.create_job(db, job)
 
     try:
         failed_count = 0
-        ai_enhanced_count = 0
-        generated_quizzes = []
 
-        # Gemini는 기존 배치 생성을 사용합니다.
-        # Groq는 JSON 배치 응답과 TPM 제한이 불안정하므로
-        # 알고리즘 초안을 만든 뒤 일부만 AI로 개선합니다.
-        if request_data.use_ai:
-            ai_provider = normalize_ai_provider(request_data.ai_provider)
+        ai_provider = normalize_ai_provider(request_data.ai_provider)
 
-            if ai_provider == "groq":
-                algorithm_quizzes, algorithm_failed_count = generate_quizzes_for_concepts(
-                    concepts=target_concepts,
-                    all_lecture_concepts=target_concepts,
-                    quiz_type=quiz_type,
-                    count_per_concept=max(2, request_data.count_per_concept),
-                    option_count=request_data.option_count,
-                )
+        if ai_provider == "groq":
+            effective_batch_size = 1
+            effective_target_min = min(4, internal_target_max)
+            effective_target_max = min(6, internal_target_max)
+            effective_retry_missing_once = True
+            effective_quota_retry_count = 1
+            effective_request_delay_seconds = 2.5
+        else:
+            effective_batch_size = AI_BATCH_SIZE
+            effective_target_min = internal_target_min
+            effective_target_max = internal_target_max
+            effective_retry_missing_once = True
+            effective_quota_retry_count = 0
+            effective_request_delay_seconds = 0.0
+            
+        print(
+            "[QUIZ_GENERATE_AI_ONLY_START] "
+            f"lecture_id={lecture_id}, "
+            f"provider={ai_provider}, "
+            f"quiz_type={quiz_type}, "
+            f"difficulty={difficulty}, "
+            f"concepts={len(target_concepts)}, "
+            f"target_quiz_count={target_quiz_count}, "
+            f"target_min={effective_target_min}, "
+            f"target_max={effective_target_max}"
+        )
 
-                failed_count += algorithm_failed_count
-                # 품질 검사에서 일부가 제외될 수 있으므로 목표보다 넉넉하게 후보를 확보합니다.
-                generated_quizzes = algorithm_quizzes[:min(len(algorithm_quizzes), target_quiz_count + 6)]
+        page_context_map = get_page_context_map(
+            db=db,
+            lecture_id=lecture_id,
+            page_start=request_data.page_start,
+            page_end=request_data.page_end,
+        )
+        ai_materials, prefilter_failed_count = prepare_quiz_materials_for_ai(
+            concepts=target_concepts,
+            quiz_type=quiz_type,
+            count_per_concept=request_data.count_per_concept,
+            option_count=request_data.option_count,
+            target_min=effective_target_min,
+            target_max=effective_target_max,
+            page_context_map=page_context_map,
+        )
 
-                concept_map = {
-                    concept.id: concept
-                    for concept in target_concepts
-                    if concept.id is not None
-                }
+        failed_count += prefilter_failed_count
 
-                enhanced_quizzes = []
-                ai_disabled_for_this_run = False
-                max_ai_items = min(GROQ_AI_MAX_ENHANCE_ITEMS, len(generated_quizzes))
+        print(
+            "[QUIZ_GENERATE_AI_MATERIAL_RESULT] "
+            f"concepts={len(target_concepts)}, "
+            f"materials={len(ai_materials)}, "
+            f"prefilter_failed={prefilter_failed_count}, "
+            f"target_min={effective_target_min}, "
+            f"target_max={effective_target_max}"
+        )
 
-                for quiz_index, draft_quiz in enumerate(generated_quizzes):
-                    concept = concept_map.get(draft_quiz.get("concept_id"))
-
-                    if (
-                        ai_disabled_for_this_run
-                        or quiz_index >= max_ai_items
-                        or not concept
-                    ):
-                        enhanced_quizzes.append(draft_quiz)
-                        continue
-
-                    try:
-                        enhanced_quiz, ai_used = enhance_quiz_with_ai(
-                            draft_quiz=draft_quiz,
-                            concept=concept,
-                            difficulty=difficulty,
-                            option_count=request_data.option_count,
-                            use_ai=request_data.use_ai,
-                            stop_on_quota_error=True,
-                            provider="groq",
-                        )
-                    except AIQuotaExceededError:
-                        ai_disabled_for_this_run = True
-                        print(
-                            "[QUIZ_GENERATE_GROQ_STOP] "
-                            "Groq TPM/rate limit에 도달해서 남은 문항은 알고리즘 초안을 사용합니다."
-                        )
-                        enhanced_quizzes.append(draft_quiz)
-                        continue
-
-                    enhanced_quizzes.append(enhanced_quiz)
-
-                    if ai_used:
-                        ai_enhanced_count += 1
-
-                generated_quizzes = enhanced_quizzes
-
-                print(
-                    "[QUIZ_GENERATE_GROQ_RESULT] "
-                    f"algorithm_drafts={len(algorithm_quizzes)}, "
-                    f"ai_attempted={max_ai_items}, "
-                    f"ai_enhanced={ai_enhanced_count}, "
-                    f"final_drafts={len(generated_quizzes)}"
-                )
-
-            else:
-                ai_materials, prefilter_failed_count = prepare_quiz_materials_for_ai(
-                    concepts=target_concepts,
-                    quiz_type=quiz_type,
-                    count_per_concept=request_data.count_per_concept,
-                    option_count=request_data.option_count,
-                )
-                failed_count += prefilter_failed_count
-
-                generated_quizzes, ai_enhanced_count = generate_quizzes_with_ai_batch(
-                    materials=ai_materials,
-                    difficulty=difficulty,
-                    option_count=request_data.option_count,
-                    use_ai=request_data.use_ai,
-                    batch_size=AI_BATCH_SIZE,
-                    target_min=target_quiz_count,
-                    target_max=internal_target_max,
-                    retry_missing_once=True,
-                    provider=request_data.ai_provider,
-                )
-
-                ai_missing_count = max(
-                    0,
-                    min(len(ai_materials), internal_target_max) - len(generated_quizzes),
-                )
-
-                print(
-                    "[QUIZ_GENERATE_AI_RESULT] "
-                    f"materials={len(ai_materials)}, "
-                    f"target={target_quiz_count}, "
-                    f"internal_target_max={internal_target_max}, "
-                    f"ai_generated={len(generated_quizzes)}, "
-                    f"ai_missing={ai_missing_count}"
-                )
-
-        # AI 결과가 없거나 부족하면 알고리즘 생성 결과로 목표 수량을 채웁니다.
-        if len(generated_quizzes) < target_quiz_count:
-            algorithm_quizzes, algorithm_failed_count = generate_quizzes_for_concepts(
-                concepts=target_concepts,
-                all_lecture_concepts=target_concepts,
-                quiz_type=quiz_type,
-                count_per_concept=request_data.count_per_concept,
-                option_count=request_data.option_count,
-            )
-
-            existing_concept_ids = {
-                quiz.get("concept_id")
-                for quiz in generated_quizzes
-                if quiz.get("concept_id") is not None
-            }
-
-            added_algorithm_count = 0
-
-            for algorithm_quiz in algorithm_quizzes:
-                if len(generated_quizzes) >= target_quiz_count:
-                    break
-
-                concept_id = algorithm_quiz.get("concept_id")
-                if concept_id in existing_concept_ids:
-                    continue
-
-                generated_quizzes.append(algorithm_quiz)
-                existing_concept_ids.add(concept_id)
-                added_algorithm_count += 1
-
-            # 기존 결과가 전혀 없을 때만 알고리즘 생성 실패 수를 반영합니다.
-            if added_algorithm_count == 0 and not generated_quizzes:
-                failed_count += algorithm_failed_count
-
-            print(
-                "[QUIZ_GENERATE_ALGORITHM_FILL] "
-                f"algorithm_candidates={len(algorithm_quizzes)}, "
-                f"added={added_algorithm_count}, "
-                f"total={len(generated_quizzes)}"
-            )
-
-        if not generated_quizzes:
+        if not ai_materials:
             job.status = "failed"
             job.progress = 100
             job.generated_count = 0
             job.failed_count = failed_count
-            job.message = "해당 범위에서 퀴즈를 생성할 수 있는 문장을 찾지 못했습니다."
+            job.message = (
+                "AI 출제용 material을 만들 수 없습니다. "
+                "concept.sentences 또는 source_sentence 필터를 확인하세요."
+            )
             quiz_generation_job_repository.save_job(db, job)
 
             return error_response(
@@ -573,63 +558,86 @@ def generate_lecture_quizzes(
                 "해당 범위에서 퀴즈를 생성할 수 있는 문장을 찾지 못했습니다.",
             )
 
+        generated_quizzes, ai_generated_count = generate_quizzes_with_ai_batch(
+            materials=ai_materials,
+            difficulty=difficulty,
+            option_count=request_data.option_count,
+            use_ai=request_data.use_ai,
+            batch_size=effective_batch_size,
+            target_min=effective_target_min,
+            target_max=effective_target_max,
+            retry_missing_once=effective_retry_missing_once,
+            provider=ai_provider,
+            quota_retry_count=effective_quota_retry_count,
+            request_delay_seconds=effective_request_delay_seconds,
+        )
+
+        ai_missing_count = max(
+            0,
+            min(len(ai_materials), effective_target_max) - len(generated_quizzes),
+        )
+
+        print(
+            "[QUIZ_GENERATE_AI_BATCH_RESULT] "
+            f"materials={len(ai_materials)}, "
+            f"ai_generated={ai_generated_count}, "
+            f"generated_quizzes={len(generated_quizzes)}, "
+            f"ai_missing={ai_missing_count}"
+        )
+
+        if not generated_quizzes:
+            job.status = "failed"
+            job.progress = 100
+            job.generated_count = 0
+            job.failed_count = failed_count + ai_missing_count
+            job.message = (
+                "AI가 퀴즈를 생성하지 못했습니다. "
+                "AI provider 설정, API key, rate limit, 프롬프트 응답 형식을 확인하세요."
+            )
+            quiz_generation_job_repository.save_job(db, job)
+
+            return error_response(
+                status.HTTP_400_BAD_REQUEST,
+                "AI가 퀴즈를 생성하지 못했습니다. AI 설정 또는 응답 로그를 확인해 주세요.",
+            )
+
         quality_quizzes, rejected_count = filter_quality_quizzes(
             generated_quizzes,
             option_count=request_data.option_count,
         )
+
         print(
-            "[QUIZ_GENERATE_QUALITY_RESULT] "
+            "[QUIZ_GENERATE_AI_QUALITY_RESULT] "
             f"before_quality={len(generated_quizzes)}, "
             f"after_quality={len(quality_quizzes)}, "
             f"quality_rejected={rejected_count}"
         )
 
-        if len(quality_quizzes) < target_quiz_count:
-            quality_quizzes, refill_rejected_count = refill_quality_quizzes(
-                quality_quizzes=quality_quizzes,
-                target_concepts=target_concepts,
-                quiz_type=quiz_type,
-                count_per_concept=request_data.count_per_concept,
-                option_count=request_data.option_count,
-                target_quiz_count=target_quiz_count,
-            )
-            rejected_count += refill_rejected_count
-
-            print(
-                "[QUIZ_GENERATE_REFILL_RESULT] "
-                f"after_refill={len(quality_quizzes)}, "
-                f"refill_rejected={refill_rejected_count}"
-            )
-            
-        # 최종 응답은 목표 문항 수를 넘지 않도록 제한합니다.
-        if len(quality_quizzes) > target_quiz_count:
-            quality_quizzes = quality_quizzes[:target_quiz_count]
-
         if not quality_quizzes:
-            total_failed_count = failed_count + rejected_count
+            total_failed_count = failed_count + rejected_count + ai_missing_count
 
             job.status = "failed"
             job.progress = 100
             job.generated_count = 0
             job.failed_count = total_failed_count
             job.message = (
-                "퀴즈 초안은 생성됐지만 품질 기준을 통과한 퀴즈가 없습니다. "
-                f"generation_failed={failed_count}, quality_rejected={rejected_count}"
+                "AI 퀴즈는 생성됐지만 품질 기준을 통과한 퀴즈가 없습니다. "
+                f"prefilter_failed={prefilter_failed_count}, "
+                f"ai_missing={ai_missing_count}, "
+                f"quality_rejected={rejected_count}"
             )
             quiz_generation_job_repository.save_job(db, job)
 
             return error_response(
                 status.HTTP_400_BAD_REQUEST,
-                "품질 기준을 통과한 퀴즈가 없습니다. AI 사용 또는 개념 범위를 조정해 주세요.",
+                "AI가 생성한 퀴즈가 품질 기준을 통과하지 못했습니다.",
             )
 
-        generated_quizzes = quality_quizzes
-        total_failed_count = failed_count + rejected_count
+        # 최종 저장 수는 목표 문항 수를 넘지 않도록 제한합니다.
+        if len(quality_quizzes) > target_quiz_count:
+            quality_quizzes = quality_quizzes[:target_quiz_count]
 
-        if ai_enhanced_count > 0 and len(generated_quizzes) < ai_enhanced_count:
-            ai_enhanced_count = len(generated_quizzes)
-
-        generation_mode = "hybrid" if ai_enhanced_count > 0 else "algorithm"
+        total_failed_count = failed_count + rejected_count + ai_missing_count
 
         quiz_set = models.QuizSet(
             lecture_id=lecture_id,
@@ -643,7 +651,7 @@ def generate_lecture_quizzes(
 
         saved_quizzes = []
 
-        for item in generated_quizzes:
+        for item in quality_quizzes:
             new_quiz = models.Quiz(
                 lecture_id=item["lecture_id"],
                 concept_id=item["concept_id"],
@@ -651,7 +659,7 @@ def generate_lecture_quizzes(
                 generation_job_id=job.id,
                 quiz_type=item["quiz_type"],
                 question=item["question"],
-                options=serialize_options(item["options"]),
+                options=serialize_options(item.get("options") or []),
                 answer=item["answer"],
                 explanation=item.get("explanation"),
                 source_sentence=item.get("source_sentence"),
@@ -663,13 +671,14 @@ def generate_lecture_quizzes(
 
         job.status = "completed"
         job.progress = 100
-        job.generated_count = len(generated_quizzes)
+        job.generated_count = len(saved_quizzes)
         job.failed_count = total_failed_count
         job.message = (
-            f"퀴즈 생성이 완료되었습니다. "
-            f"AI 개선 {ai_enhanced_count}개, "
-            f"알고리즘 보완 {len(generated_quizzes) - ai_enhanced_count}개, "
-            f"quality_rejected={rejected_count}"
+            "AI 퀴즈 생성이 완료되었습니다. "
+            f"AI 생성 {ai_generated_count}개, "
+            f"품질 통과 {len(saved_quizzes)}개, "
+            f"quality_rejected={rejected_count}, "
+            f"ai_missing={ai_missing_count}"
         )
 
         quiz_repository.save_generated_quizzes(db, saved_quizzes)
@@ -682,14 +691,18 @@ def generate_lecture_quizzes(
             "page_start": request_data.page_start,
             "page_end": request_data.page_end,
             "quiz_type": quiz_type,
-            "generated_count": len(generated_quizzes),
+            "generated_count": len(saved_quizzes),
             "target_quiz_count": target_quiz_count,
             "failed_count": total_failed_count,
             "rejected_count": rejected_count,
             "ai_requested": request_data.use_ai,
-            "ai_enhanced_count": ai_enhanced_count,
-            "generation_mode": generation_mode,
-            "message": "퀴즈 생성이 완료되었습니다. GET /api/lectures/{lecture_id}/quizzes/generate/status 에서 최신 생성 결과를 확인하세요.",
+            "ai_provider": ai_provider,
+            "ai_generated_count": ai_generated_count,
+            "generation_mode": "ai_only",
+            "message": (
+                "AI 퀴즈 생성이 완료되었습니다. "
+                "GET /api/lectures/{lecture_id}/quizzes/generate/status 에서 최신 생성 결과를 확인하세요."
+            ),
         }
 
     except Exception as exc:
@@ -700,6 +713,7 @@ def generate_lecture_quizzes(
         if failed_job:
             failed_job.status = "failed"
             failed_job.progress = 100
+            failed_job.generated_count = 0
             failed_job.message = f"퀴즈 생성 중 서버 오류가 발생했습니다: {str(exc)}"
             quiz_generation_job_repository.save_job(db, failed_job)
 

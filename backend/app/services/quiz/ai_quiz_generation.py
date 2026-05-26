@@ -4,6 +4,7 @@ import re
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
+import time
 
 import app.models as models
 from app.core.config import settings
@@ -25,10 +26,7 @@ from app.services.quiz.quiz_generation import (
     is_definition_answer_quality,
     select_source_sentences_for_ai,
 )
-from app.services.quiz.quiz_validation import (
-    SUPPORTED_GENERATED_QUIZ_TYPES,
-    validate_generated_quiz_dict,
-)
+from app.services.quiz.quiz_validation import validate_generated_quiz_dict
 
 
 class AIQuizGenerationError(Exception):
@@ -69,6 +67,21 @@ def is_ai_quota_exceeded_error(exc: Exception) -> bool:
 
     return any(marker.lower() in message for marker in quota_markers)
 
+def extract_retry_after_seconds(exc: Exception, default_seconds: float = 12.0) -> float:
+    """
+    Groq 429 메시지의 'Please try again in 14.715s'에서 대기 시간을 추출합니다.
+    추출 실패 시 기본값을 사용합니다.
+    """
+    message = str(exc)
+
+    match = re.search(r"try again in\s+([0-9.]+)s", message, flags=re.IGNORECASE)
+    if match:
+        try:
+            return min(30.0, max(3.0, float(match.group(1)) + 1.0))
+        except Exception:
+            pass
+
+    return default_seconds
 
 def normalize_ai_text(value: Optional[str]) -> str:
     return " ".join(str(value or "").strip().split())
@@ -117,6 +130,101 @@ def get_ai_provider_config(provider: Optional[str] = None) -> Dict[str, Optional
     }
 
 MIN_STRONG_SOURCE_SENTENCE_COMPACT_LENGTH = 18
+
+AI_GENERATED_QUIZ_TYPES = {
+    "MULTIPLE_CHOICE",
+    "OX",
+    "SHORT_ANSWER",
+    "SUBJECTIVE",
+}
+
+LEGACY_AI_QUIZ_TYPE_ALIASES = {
+    "DEFINITION": "MULTIPLE_CHOICE",
+    "KEYWORD_CHOICE": "MULTIPLE_CHOICE",
+    "BLANK": "SHORT_ANSWER",
+    "TRUE_FALSE": "OX",
+}
+
+
+def canonicalize_ai_quiz_type(
+    quiz_type: Optional[str],
+    default: str = "MULTIPLE_CHOICE",
+) -> str:
+    """
+    기존 퀴즈 타입을 새 퀴즈 타입으로 변환합니다.
+
+    기존:
+    - DEFINITION, KEYWORD_CHOICE -> MULTIPLE_CHOICE
+    - BLANK -> SHORT_ANSWER
+    - OX -> OX
+
+    신규:
+    - MULTIPLE_CHOICE
+    - OX
+    - SHORT_ANSWER
+    - SUBJECTIVE
+    """
+    normalized = normalize_ai_text(quiz_type).upper()
+
+    if not normalized or normalized == "MIXED":
+        return default
+
+    normalized = LEGACY_AI_QUIZ_TYPE_ALIASES.get(normalized, normalized)
+
+    if normalized in AI_GENERATED_QUIZ_TYPES:
+        return normalized
+
+    return default
+
+
+def normalize_string_list(raw_items: Any, max_items: int = 6) -> List[str]:
+    if not isinstance(raw_items, list):
+        return []
+
+    return unique_keep_order([
+        normalize_ai_text(item)
+        for item in raw_items
+        if normalize_ai_text(item)
+    ])[:max_items]
+
+
+def format_subjective_explanation(
+    explanation: str,
+    rubric: List[str],
+    grading_keywords: List[str],
+) -> str:
+    """
+    현재 Quiz 모델에 rubric/grading_keywords 전용 컬럼이 없다면,
+    주관식 채점 기준을 explanation에 함께 저장합니다.
+    """
+    parts = []
+
+    if normalize_ai_text(explanation):
+        parts.append(normalize_ai_text(explanation))
+
+    if rubric:
+        rubric_text = " / ".join(rubric)
+        parts.append(f"채점 기준: {rubric_text}")
+
+    if grading_keywords:
+        keyword_text = ", ".join(grading_keywords)
+        parts.append(f"핵심 키워드: {keyword_text}")
+
+    return "\n".join(parts).strip()
+
+
+def is_short_answer_grounded_in_source(answer: str, source_sentence: str) -> bool:
+    """
+    SHORT_ANSWER는 학생이 직접 입력하는 빈칸형이므로,
+    정답 핵심어가 source_sentence에 실제로 등장해야 안전합니다.
+    """
+    normalized_answer = normalize_for_ai_match(answer)
+    normalized_source = normalize_for_ai_match(source_sentence)
+
+    if not normalized_answer or not normalized_source:
+        return False
+
+    return normalized_answer in normalized_source
 
 
 def select_stronger_source_sentence(
@@ -375,21 +483,20 @@ def get_difficulty_instruction(difficulty: str) -> str:
 
     if normalized == "EASY":
         return (
-            "EASY: 학생이 핵심 용어와 기본 설명을 이해했는지 확인한다. "
-            "너무 꼬지 말고 원문 근거가 명확한 문제를 만든다."
+            "EASY: 핵심 개념의 기본 의미를 확인한다. "
+            "단, 단순 용어 맞히기만 만들지 말고 개념의 역할이나 결과를 함께 묻는다."
         )
 
     if normalized == "HARD":
         return (
-            "HARD: 단순 용어 암기보다 개념 간 관계, 비교, 원인과 결과, 적용 상황을 묻는다. "
-            "단, 반드시 제공된 source_sentences와 keywords 안에서만 출제한다."
+            "HARD: 단순 암기보다 개념 간 관계, 비교, 원인과 결과, 적용 상황, "
+            "오개념 구분을 묻는다. 반드시 제공된 source_sentences 안에서만 출제한다."
         )
 
     return (
-        "MEDIUM: 핵심 개념의 의미와 관련 개념과의 차이를 확인한다. "
-        "단순 빈칸 암기보다 수업 내용을 이해했는지 묻는다."
+        "MEDIUM: 핵심 개념의 의미뿐 아니라 관련 개념과의 차이, "
+        "왜 그런 결과가 나오는지, 어떤 상황에 적용되는지를 확인한다."
     )
-
 
 def select_representative_concept_name(concept: models.Concept) -> str:
     concept_name = normalize_ai_text(concept.concept_name)
@@ -463,19 +570,23 @@ def build_ai_messages(
 
     draft = source_payload.get("draft_quiz") or {}
 
-    # AI에 꼭 필요한 정보만 전달해 토큰을 줄입니다.
+    preferred_quiz_type = canonicalize_ai_quiz_type(
+        draft.get("quiz_type"),
+        default="MULTIPLE_CHOICE",
+    )
+
     compact_payload = {
         "concept_name": source_payload.get("concept_name"),
         "original_concept_name": source_payload.get("original_concept_name"),
         "page_num": source_payload.get("page_num"),
         "keywords": source_payload.get("keywords") or [],
-        # Groq gpt-oss-20b의 TPM과 출력 안정성을 위해 단건 개선에는 핵심 근거만 짧게 전달합니다.
         "source_sentences": [
-            str(sentence)[:220]
-            for sentence in (source_payload.get("source_sentences") or [])[:3]
+            str(sentence)[:260]
+            for sentence in (source_payload.get("source_sentences") or [])[:4]
         ],
+        "preferred_quiz_type": preferred_quiz_type,
         "draft_quiz": {
-            "quiz_type": draft.get("quiz_type"),
+            "quiz_type": preferred_quiz_type,
             "question": draft.get("question"),
             "options": draft.get("options"),
             "answer": draft.get("answer"),
@@ -487,48 +598,79 @@ def build_ai_messages(
         compact_payload["regenerate_reason"] = normalize_ai_text(reason)
 
     output_schema = {
-        "quiz_type": "DEFINITION",
+        "quiz_type": "MULTIPLE_CHOICE | OX | SHORT_ANSWER | SUBJECTIVE",
         "question": "문제 내용",
-        "options": ["보기1", "보기2", "보기3", "보기4"],
-        "answer": "보기 중 정답과 완전히 같은 문자열",
-        "explanation": "해설",
-        "source_sentence": "source_sentences 중 정답의 직접 근거 문장 1개",
+        "options": ["객관식 보기1", "객관식 보기2", "객관식 보기3", "객관식 보기4"],
+        "answer": "정답 또는 모범답안",
+        "explanation": "해설 또는 채점 기준 요약",
+        "source_sentence": "source_sentences 중 가장 직접적인 근거 문장 1개",
+        "accepted_answers": ["SHORT_ANSWER에서 허용할 유사 정답"],
+        "grading_keywords": ["SUBJECTIVE 채점 핵심어"],
+        "rubric": ["SUBJECTIVE 채점 기준"],
     }
+
     difficulty_instruction = (
         source_payload.get("difficulty_instruction")
         or get_difficulty_instruction(difficulty)
     )
 
     system_message = (
-        "너는 대학 강의 PDF 기반 한국어 객관식 퀴즈 생성기다. "
-        "제공된 JSON의 concept_name, keywords, source_sentences 정보만 사용한다. "
+        "너는 대학 강의 PDF 기반 한국어 이해도 평가 퀴즈 생성기다. "
+        "반드시 제공된 JSON의 concept_name, keywords, source_sentences 정보만 사용한다. "
         "외부 지식, 추측, 원문에 없는 사실은 금지한다. "
-        "반드시 JSON 객체 하나만 반환한다. JSON 앞뒤에 설명, 생각 과정, Markdown을 절대 붙이지 않는다. "
+        "학생의 단순 암기가 아니라 개념 이해도를 측정하는 문제를 만든다. "
+        "반드시 JSON 객체 하나만 반환한다. "
+        "JSON 앞뒤에 설명, 생각 과정, Markdown 코드블록을 절대 붙이지 않는다. "
         "출력의 첫 글자는 반드시 { 이고 마지막 글자는 반드시 } 이다."
     )
 
     user_message = (
-        "concept_name에 대한 이해도 확인용 퀴즈 1개를 생성하거나 개선하라.\n\n"
+        "concept_name에 대한 이해도 확인용 퀴즈 1개를 생성하라.\n\n"
         f"난이도 지침: {difficulty_instruction}\n\n"
-        "규칙:\n"
-        "- quiz_type은 BLANK, DEFINITION, KEYWORD_CHOICE, OX 중 하나다.\n"
-        "- draft_quiz.quiz_type을 우선하되, 부적절하면 더 자연스러운 유형으로 바꿔도 된다.\n"
-        f"- OX는 options가 정확히 [\"O\", \"X\"], 그 외 유형은 options가 정확히 {option_count}개다.\n"
-        "- answer는 반드시 options 중 하나와 완전히 같은 문자열이어야 한다.\n"
-        "- question에 answer를 그대로 노출하지 마라. 단, BLANK는 정답 위치를 ___로 가린다.\n"
-        "- source_sentence는 source_sentences 중 정답의 직접 근거가 되는 문장 1개를 그대로 사용하라.\n"
-        "- source_sentences 안에 정답의 근거가 없으면 draft_quiz.source_sentence를 사용하지 말고, source_sentences 안에서 만들 수 있는 다른 문제로 바꿔라.\n"
-        "- KEYWORD_CHOICE 정답은 핵심어/짧은 명사구만 허용한다. 긴 문장 전체를 정답으로 쓰지 마라.\n"
-        "- DEFINITION 보기는 완전한 설명 문장이어야 하며, 중간에서 끊긴 원문 조각을 쓰지 마라.\n"
-        "- '가위', '바위', '보', '초기', '확인', '방울', '경우', '과정', '방법', '결과', '상태' 같은 일반 단어/예시 단어를 정답으로 쓰지 마라.\n"
-        "- 오답은 같은 주제 범위 안에서 그럴듯하지만 명확히 틀리게 만들어라.\n"
+        "허용 quiz_type:\n"
+        "- MULTIPLE_CHOICE: 객관식\n"
+        "- OX: O/X\n"
+        "- SHORT_ANSWER: 단답형 빈칸\n"
+        "- SUBJECTIVE: 주관식\n\n"
+        "공통 규칙:\n"
+        "- quiz_type은 반드시 MULTIPLE_CHOICE, OX, SHORT_ANSWER, SUBJECTIVE 중 하나만 사용한다.\n"
+        "- BLANK, DEFINITION, KEYWORD_CHOICE는 절대 사용하지 마라.\n"
+        "- preferred_quiz_type을 우선 따르되, source_sentences가 부족하면 더 적합한 새 타입으로 바꿔도 된다.\n"
+        "- source_sentence는 반드시 입력 source_sentences 중 하나를 그대로 사용한다.\n"
+        "- source_sentences 안에서 직접 근거를 찾을 수 없는 내용은 출제하지 마라.\n"
         "- question은 concept_name과 직접 관련된 내용을 물어야 한다.\n"
-        "- explanation은 왜 정답인지 1~2문장으로 짧게 작성하라.\n"
-        "- Markdown 코드블록 없이 JSON만 반환하라. 첫 글자는 {, 마지막 글자는 } 이어야 한다.\n"
-        "- JSON 문자열 값 안에서는 큰따옴표를 쓰지 말고 작은따옴표를 사용하라.\n\n"
-        "- 숫자/수량이 정답이면 source_sentence에도 같은 숫자/수량이 반드시 들어 있어야 한다.\n"
-        "- OX 문제는 참/거짓 판단 가능한 완전한 명제로만 만들고, 제목이나 'A vs B' 형태만으로 만들지 마라.\n"
-        "- BLANK는 문장 맨 앞/맨 끝을 빈칸으로 만들지 말고, 핵심 개념어만 ___로 가려라.\n"
+        "- explanation은 왜 정답인지 또는 어떻게 채점해야 하는지 1~3문장으로 작성한다.\n"
+        "- Markdown 코드블록 없이 JSON만 반환한다.\n"
+        "- JSON 문자열 값 안에서는 큰따옴표를 쓰지 말고 작은따옴표를 사용한다.\n\n"
+        "MULTIPLE_CHOICE 규칙:\n"
+        f"- options는 정확히 {option_count}개다.\n"
+        "- answer는 반드시 options 중 하나와 완전히 같은 문자열이다.\n"
+        "- 단순히 '다음 설명에 해당하는 핵심 개념은?'처럼 용어만 고르게 만들지 마라.\n"
+        "- 정답과 오답은 모두 설명형 보기로 만든다.\n"
+        "- 좋은 문제 유형: 개념의 원인/결과, 개념 간 비교, 적용 상황, 오개념 구분.\n"
+        "- 오답은 같은 주제 안에서 그럴듯하지만 source_sentence 기준으로 명확히 틀려야 한다.\n"
+        "- question에 answer 전체를 그대로 노출하지 마라.\n\n"
+        "OX 규칙:\n"
+        "- options는 정확히 [\"O\", \"X\"]다.\n"
+        "- answer는 O 또는 X다.\n"
+        "- O 문항만 만들지 말고, 거짓 명제가 자연스러우면 X 문항도 만들 수 있다.\n"
+        "- X 문항은 source_sentence의 핵심 관계 하나만 바꿔 만든다.\n"
+        "- question은 참/거짓 판단 가능한 완전한 명제여야 한다.\n"
+        "- 제목, 단어 나열, 'A vs B' 형태는 금지한다.\n\n"
+        "SHORT_ANSWER 규칙:\n"
+        "- options는 반드시 빈 배열 []이다.\n"
+        "- question에는 반드시 ___가 포함되어야 한다.\n"
+        "- ___는 문장 맨 앞이나 맨 끝에 두지 말고 핵심 개념어 위치에 둔다.\n"
+        "- answer는 source_sentence에 실제로 등장하는 핵심 개념어 또는 짧은 명사구다.\n"
+        "- answer에 '초기', '확인', '방울', '경우', '과정', '방법', '결과', '상태' 같은 일반 단어를 쓰지 마라.\n"
+        "- accepted_answers에는 띄어쓰기 차이 등 허용 가능한 유사 정답을 넣어도 된다.\n\n"
+        "SUBJECTIVE 규칙:\n"
+        "- options는 반드시 빈 배열 []이다.\n"
+        "- answer는 학생 답안이 아니라 모범답안이다.\n"
+        "- question은 설명, 비교, 이유, 적용을 요구해야 한다.\n"
+        "- rubric 또는 grading_keywords를 반드시 제공한다.\n"
+        "- rubric은 2~4개 기준으로 작성한다.\n"
+        "- 원문에 없는 확장 지식으로 채점 기준을 만들지 마라.\n\n"
         f"출력 형식: {json.dumps(output_schema, ensure_ascii=False, separators=(',', ':'))}\n\n"
         f"입력: {json.dumps(compact_payload, ensure_ascii=False, separators=(',', ':'))}"
     )
@@ -583,11 +725,23 @@ def is_answer_exposed_in_question(
     if not question or not answer:
         return False
 
-    if quiz_type == "BLANK":
+    canonical_type = canonicalize_ai_quiz_type(quiz_type)
+
+    # OX의 answer는 O/X라서 문제 본문 노출 검사 대상이 아닙니다.
+    if canonical_type == "OX":
         return False
 
-    return compact_text(answer).lower() in compact_text(question).lower()
+    # 주관식은 모범답안 전체가 문제에 그대로 들어간 경우만 막습니다.
+    if canonical_type == "SUBJECTIVE":
+        return normalize_for_ai_match(question) == normalize_for_ai_match(answer)
 
+    normalized_answer = normalize_for_ai_match(answer)
+    normalized_question = normalize_for_ai_match(question.replace("___", ""))
+
+    if not normalized_answer:
+        return False
+
+    return normalized_answer in normalized_question
 
 def select_source_sentence(
     requested_source_sentence: str,
@@ -616,7 +770,10 @@ def clean_ai_quiz_payload(
     source_sentences: Optional[List[str]] = None,
 ) -> Dict:
     """
-    AI 단건 응답을 내부 퀴즈 형식으로 보정하고 저장 전 검증을 수행합니다.
+    AI 단건 응답을 새 퀴즈 타입 기준으로 정리하고 저장 전 검증합니다.
+
+    이 함수는 더 이상 KEYWORD_CHOICE/DEFINITION/BLANK를 최종 타입으로 저장하지 않습니다.
+    기존 타입이 들어오면 새 타입으로 canonicalize합니다.
     """
     source_sentences = [
         normalize_ai_text(sentence)
@@ -624,16 +781,15 @@ def clean_ai_quiz_payload(
         if normalize_ai_text(sentence)
     ]
 
-    fallback_quiz_type = normalize_ai_text(
-        fallback_quiz.get("quiz_type") or "DEFINITION"
-    ).upper()
+    fallback_quiz_type = canonicalize_ai_quiz_type(
+        fallback_quiz.get("quiz_type"),
+        default="MULTIPLE_CHOICE",
+    )
 
-    quiz_type = normalize_ai_text(data.get("quiz_type") or fallback_quiz_type).upper()
-    if quiz_type not in SUPPORTED_GENERATED_QUIZ_TYPES:
-        quiz_type = fallback_quiz_type
-
-    if quiz_type not in SUPPORTED_GENERATED_QUIZ_TYPES:
-        quiz_type = "DEFINITION"
+    quiz_type = canonicalize_ai_quiz_type(
+        data.get("quiz_type"),
+        default=fallback_quiz_type,
+    )
 
     question = normalize_ai_text(data.get("question") or fallback_quiz.get("question"))
     answer = normalize_ai_text(data.get("answer") or fallback_quiz.get("answer"))
@@ -645,64 +801,102 @@ def clean_ai_quiz_payload(
         source_sentences=source_sentences,
     )
 
-    raw_options = data.get("options")
-    options = normalize_options(raw_options)
-
-    fallback_options = normalize_options(fallback_quiz.get("options") or [])
-
-    if quiz_type == "OX":
-        options = ["O", "X"]
-        if answer not in options:
-            answer = "O"
-    else:
-        if not answer:
-            raise AIQuizGenerationError("AI가 생성한 answer가 비어 있습니다.")
-
-        options = fill_options_from_fallback(
-            options=options,
-            answer=answer,
-            fallback_options=fallback_options,
-            option_count=option_count,
-        )
-
-        if answer not in options:
-            options = [answer] + [option for option in options if option != answer]
-            options = options[:option_count]
-
-    if not explanation:
-        explanation = f"원문 근거: {source_sentence}"
-
     source_sentence = select_stronger_source_sentence(
         requested_source_sentence=source_sentence,
         allowed_sources=source_sentences,
     )
 
-    if quiz_type == "OX":
-        statement = question.split("\n\n")[-1].strip()
-        if not is_valid_ox_statement(statement):
-            raise AIQuizGenerationError("OX 문제가 참/거짓 판단 가능한 명제가 아닙니다.")
+    if not question:
+        raise AIQuizGenerationError("AI가 생성한 question이 비어 있습니다.")
 
-    if quiz_type == "BLANK" and is_bad_blank_question_shape(question):
-        raise AIQuizGenerationError("BLANK 문제가 원문 조각 맞추기 형태입니다.")
+    if not answer:
+        raise AIQuizGenerationError("AI가 생성한 answer가 비어 있습니다.")
+
+    if not source_sentence:
+        raise AIQuizGenerationError("AI가 생성한 source_sentence가 비어 있습니다.")
+
+    if source_sentences and source_sentence not in source_sentences:
+        raise AIQuizGenerationError("source_sentence가 입력 source_sentences에 포함되어 있지 않습니다.")
 
     if is_cut_or_dangling_text(source_sentence):
         raise AIQuizGenerationError("source_sentence가 중간에서 잘린 원문 조각입니다.")
 
-    if quiz_type == "DEFINITION" and not is_definition_answer_quality(answer, source_sentence):
-        raise AIQuizGenerationError("DEFINITION 정답이 완전한 설명 문장이 아니거나 source_sentence와 맞지 않습니다.")
-    
-    if quiz_type != "OX" and not is_answer_grounded_in_source(answer, source_sentence):
-        raise AIQuizGenerationError("정답과 source_sentence의 근거가 일치하지 않습니다.")
-    
-    if quiz_type == "KEYWORD_CHOICE" and not is_good_short_answer(answer):
-        raise AIQuizGenerationError("KEYWORD_CHOICE 정답이 핵심어/짧은 명사구가 아닙니다.")
+    raw_options = data.get("options")
+    options = normalize_options(raw_options)
 
-    if quiz_type == "BLANK" and not is_good_blank_answer(answer):
-        raise AIQuizGenerationError("BLANK 정답이 핵심 개념어로 적절하지 않습니다.")
-    
-    if any(is_cut_or_dangling_text(option) for option in options):
-        raise AIQuizGenerationError("options에 중간에서 잘린 원문 조각이 포함되어 있습니다.")
-    
+    accepted_answers = normalize_string_list(data.get("accepted_answers"), max_items=5)
+    grading_keywords = normalize_string_list(data.get("grading_keywords"), max_items=6)
+    rubric = normalize_string_list(data.get("rubric") or data.get("grading_rubric"), max_items=5)
+
+    if quiz_type == "MULTIPLE_CHOICE":
+        if len(options) != option_count:
+            raise AIQuizGenerationError(
+                f"MULTIPLE_CHOICE options 개수가 {option_count}개가 아닙니다."
+            )
+
+        if answer not in options:
+            raise AIQuizGenerationError("MULTIPLE_CHOICE answer가 options 안에 없습니다.")
+
+        if any(is_cut_or_dangling_text(option) for option in options):
+            raise AIQuizGenerationError("MULTIPLE_CHOICE options에 잘린 원문 조각이 포함되어 있습니다.")
+
+        if is_answer_exposed_in_question(quiz_type, question, answer):
+            raise AIQuizGenerationError("MULTIPLE_CHOICE question에 answer가 그대로 노출되어 있습니다.")
+
+    elif quiz_type == "OX":
+        options = ["O", "X"]
+
+        if answer not in options:
+            raise AIQuizGenerationError("OX answer는 O 또는 X여야 합니다.")
+
+        statement = question.split("\n\n")[-1].strip()
+        if not is_valid_ox_statement(statement):
+            raise AIQuizGenerationError("OX 문제가 참/거짓 판단 가능한 명제가 아닙니다.")
+
+    elif quiz_type == "SHORT_ANSWER":
+        options = []
+
+        if "___" not in question:
+            raise AIQuizGenerationError("SHORT_ANSWER question에는 ___가 포함되어야 합니다.")
+
+        if is_bad_blank_question_shape(question):
+            raise AIQuizGenerationError("SHORT_ANSWER 문제가 원문 조각 맞추기 형태입니다.")
+
+        if not is_good_blank_answer(answer):
+            raise AIQuizGenerationError("SHORT_ANSWER answer가 핵심 개념어로 적절하지 않습니다.")
+
+        if not is_short_answer_grounded_in_source(answer, source_sentence):
+            raise AIQuizGenerationError("SHORT_ANSWER answer가 source_sentence에 직접 등장하지 않습니다.")
+
+        if is_answer_exposed_in_question(quiz_type, question, answer):
+            raise AIQuizGenerationError("SHORT_ANSWER question에 answer가 그대로 노출되어 있습니다.")
+
+    elif quiz_type == "SUBJECTIVE":
+        options = []
+
+        if len(compact_text(answer)) < 12:
+            raise AIQuizGenerationError("SUBJECTIVE 모범답안이 너무 짧습니다.")
+
+        if is_cut_or_dangling_text(answer):
+            raise AIQuizGenerationError("SUBJECTIVE 모범답안이 중간에서 잘린 원문 조각입니다.")
+
+        if not explanation and not rubric and not grading_keywords:
+            raise AIQuizGenerationError(
+                "SUBJECTIVE는 explanation, rubric, grading_keywords 중 하나가 필요합니다."
+            )
+
+        explanation = format_subjective_explanation(
+            explanation=explanation,
+            rubric=rubric,
+            grading_keywords=grading_keywords,
+        )
+
+    else:
+        raise AIQuizGenerationError(f"지원하지 않는 quiz_type입니다: {quiz_type}")
+
+    if not explanation:
+        explanation = f"원문 근거: {source_sentence}"
+
     cleaned_quiz = {
         **fallback_quiz,
         "quiz_type": quiz_type,
@@ -711,6 +905,10 @@ def clean_ai_quiz_payload(
         "answer": answer,
         "explanation": explanation,
         "source_sentence": source_sentence,
+        "source_sentences": source_sentences,
+        "accepted_answers": accepted_answers,
+        "grading_keywords": grading_keywords,
+        "rubric": rubric,
     }
 
     validation_error = validate_generated_quiz_dict(
@@ -854,60 +1052,107 @@ def build_batch_ai_messages(
             if normalize_ai_text(sentence)
         ]
 
+        preferred_quiz_type = canonicalize_ai_quiz_type(
+            material.get("preferred_quiz_type"),
+            default="MULTIPLE_CHOICE",
+        )
+
         compact_materials.append({
             "concept_id": material.get("concept_id"),
             "page_num": material.get("page_num"),
             "concept_label": material.get("concept_label"),
+            "original_concept_name": material.get("original_concept_name"),
             "keywords": material.get("keywords") or [],
             "source_sentences": source_sentences,
-            "preferred_quiz_type": material.get("preferred_quiz_type") or "DEFINITION",
+            "preferred_quiz_type": preferred_quiz_type,
+            "domain_hint": "게임이론/사회적 의사결정 문맥에서는 선수(player)를 스포츠 선수가 아니라 의사결정 주체로 해석한다.",
         })
 
     output_schema = {
         "quizzes": [
             {
                 "concept_id": 1,
-                "quiz_type": "DEFINITION",
+                "quiz_type": "MULTIPLE_CHOICE | OX | SHORT_ANSWER | SUBJECTIVE",
                 "question": "문제 내용",
-                "options": ["보기1", "보기2", "보기3", "보기4"],
-                "answer": "options 중 정답과 완전히 같은 문자열",
-                "explanation": "해설",
+                "options": ["객관식 보기1", "객관식 보기2", "객관식 보기3", "객관식 보기4"],
+                "answer": "정답 또는 모범답안",
+                "explanation": "해설 또는 채점 기준 요약",
                 "source_sentence": "source_sentences 중 가장 직접적인 근거 문장 1개",
+                "accepted_answers": ["SHORT_ANSWER 허용 정답"],
+                "grading_keywords": ["SUBJECTIVE 채점 핵심어"],
+                "rubric": ["SUBJECTIVE 채점 기준"],
             }
         ]
     }
 
     system_message = (
-        "너는 대학 강의 PDF 기반 한국어 객관식 퀴즈 생성기다. "
+        "너는 대학 강의 PDF 기반 한국어 이해도 평가 퀴즈 생성기다. "
         "반드시 입력 JSON의 source_sentences 안의 정보만 사용한다. "
         "외부 지식, 추측, 원문에 없는 사실은 금지한다. "
+        "학생의 단순 암기가 아니라 개념 이해도를 측정하는 문제를 만든다. "
         "반드시 JSON 객체 하나만 반환한다."
     )
 
     user_message = (
         "각 item마다 학생 이해도 확인용 퀴즈를 정확히 1개씩 생성하라.\n\n"
         f"난이도 지침: {get_difficulty_instruction(difficulty)}\n\n"
-        "규칙:\n"
+        "허용 quiz_type:\n"
+        "- MULTIPLE_CHOICE: 객관식\n"
+        "- OX: O/X\n"
+        "- SHORT_ANSWER: 단답형 빈칸\n"
+        "- SUBJECTIVE: 주관식\n\n"
+        "공통 규칙:\n"
         "- quizzes 개수는 입력 items 개수와 같아야 하며, 어떤 item도 생략하지 마라.\n"
         "- 각 quiz에는 해당 item의 concept_id를 그대로 넣어라.\n"
-        "- quiz_type은 BLANK, DEFINITION, KEYWORD_CHOICE, OX 중 하나다.\n"
-        "- preferred_quiz_type을 우선 따르되, 불안정하면 DEFINITION 또는 KEYWORD_CHOICE로 바꿔도 된다.\n"
-        "- 여러 item이 있으면 가능한 범위에서 DEFINITION, KEYWORD_CHOICE, BLANK를 섞어라.\n"
-        "- OX는 원문 사실 판단이 명확할 때만 사용하라.\n"
-        f"- OX는 options가 정확히 [\"O\", \"X\"], 그 외 유형은 options가 정확히 {option_count}개다.\n"
-        "- answer는 반드시 options 중 하나와 완전히 같은 문자열이어야 한다.\n"
-        "- KEYWORD_CHOICE의 answer는 긴 문장/설명문이 아니라 핵심어 또는 짧은 명사구여야 한다.\n"
-        "- DEFINITION의 answer/options는 완전한 설명 문장이어야 하며, 중간에서 끊긴 원문 조각은 금지한다.\n"
-        "- BLANK의 answer는 핵심 개념어 또는 명사구여야 하며, '합리적으로', '독립적으로', '무의식적으로' 같은 단순 부사/수식어는 금지한다.\n"
-        "- '가위', '바위', '보', '초기', '확인', '방울', '경우', '과정', '방법', '결과', '상태' 같은 일반 단어/예시 단어를 정답으로 쓰지 마라.\n"
-        "- question에 answer를 그대로 노출하지 마라. 단, BLANK는 정답 위치를 ___로 가린다.\n"
-        "- 부정형 문제, 예: '옳지 않은 것은?', '관련 없는 것은?'은 만들지 마라.\n"
+        "- quiz_type은 반드시 MULTIPLE_CHOICE, OX, SHORT_ANSWER, SUBJECTIVE 중 하나다.\n"
+        "- BLANK, DEFINITION, KEYWORD_CHOICE는 절대 사용하지 마라.\n"
+        "- preferred_quiz_type을 우선 따르되, source_sentences에 더 적합한 유형이 있으면 새 타입 안에서 변경해도 된다.\n"
+        "- source_sentence는 반드시 해당 item의 source_sentences 중 하나를 그대로 넣어라.\n"
+        "- source_sentences 안에서 직접 근거를 찾을 수 없는 내용은 출제하지 마라.\n"
         "- question은 concept_label과 직접 관련된 내용을 물어야 한다.\n"
-        "- source_sentences가 짧거나 문장이 끊겨 있으면, 같은 item의 source_sentences 전체를 함께 읽고 문제와 해설을 만들어라.\n"
-        "- source_sentence에는 해당 item의 source_sentences 중 가장 직접적인 근거 문장 1개를 그대로 넣어라.\n"
-        "- 오답은 같은 주제 범위 안에서 그럴듯하지만 명확히 틀리게 만들어라.\n"
-        "- explanation은 왜 정답인지 1~2문장으로 짧게 작성하라.\n"
+        "- source_sentences가 짧거나 문장이 끊겨 있으면 같은 item의 source_sentences 전체를 함께 읽고 문제와 해설을 만들어라.\n"
+        "- explanation은 왜 정답인지 또는 어떻게 채점해야 하는지 1~3문장으로 작성한다.\n"
+        "- 부정형 문제, 예: '옳지 않은 것은?', '관련 없는 것은?'은 만들지 마라.\n"
+        "- 강의 문맥이 게임이론이면 '선수(player)'는 스포츠 선수가 아니라 의사결정의 주체를 뜻한다.\n"
+        "- '전략(strategy)'은 경기 전술, 팀 훈련, 수비 패턴, 피드백 모임이 아니라 각 의사결정 주체가 선택하는 내용을 뜻한다.\n"
+        "- source_sentences에 스포츠 경기 문맥이 없으면 '경기 중', '팀 전체', '상대 팀', '수비 패턴', '연습 계획', '피드백 모임' 같은 표현을 절대 쓰지 마라.\n"
+        "- source_sentences가 짧더라도 함께 제공된 주변 문장을 이용해 같은 page의 개념 관계를 반영하라.\n"
         "- Markdown 코드블록 없이 JSON만 반환하라.\n\n"
+        "MULTIPLE_CHOICE 규칙:\n"
+        f"- options는 정확히 {option_count}개다.\n"
+        "- answer는 반드시 options 중 하나와 완전히 같은 문자열이다.\n"
+        "- 단순히 핵심어/개념명만 고르는 KEYWORD_CHOICE식 문제는 금지한다.\n"
+        "- 정답과 오답은 모두 설명형 보기로 만든다.\n"
+        "- 좋은 문제 유형: 원인-결과, 개념 비교, 적용 상황, 실험 결과 해석, 오개념 구분.\n"
+        "- 오답은 같은 주제 범위 안에서 그럴듯하지만 source_sentence 기준으로 명확히 틀려야 한다.\n"
+        "- question에 answer 전체를 그대로 노출하지 마라.\n"
+        "- MEDIUM 이상에서는 가능하면 '무엇인가?' 정의형보다 '왜 그런가?', '어떤 차이가 있는가?', '어떤 상황에 해당하는가?' 형태를 우선한다.\n"
+        "- 오답은 원문에 없는 임의 상황을 만들지 말고, 같은 page의 다른 개념과 헷갈릴 수 있는 선택지로 만든다.\n"
+        "- 보기에는 source_sentences의 용어를 자연스럽게 풀어 쓰되, 원문 의미를 바꾸지 마라.\n"
+        "- 오개념 구분 문항을 만들 때는 '어떤 오해인가?', '잘못된 해석은?'처럼 틀린 보기 하나를 고르게 만들지 마라.\n"
+        "- 오개념 구분 문항은 '왜 잘못된 해석인가?', '원문 흐름과 어긋나는 이유는 무엇인가?'처럼 이유를 고르게 만들어라.\n"
+        "- 보기들이 모두 오해처럼 보이는 선택지는 만들지 마라. 정답은 원문 근거와 직접 연결된 이유여야 한다.\n\n"
+        "OX 규칙:\n"
+        "- options는 정확히 [\"O\", \"X\"]다.\n"
+        "- answer는 O 또는 X다.\n"
+        "- O만 반복하지 마라. 거짓 명제를 안전하게 만들 수 있으면 X도 사용하라.\n"
+        "- X 문항은 source_sentence의 핵심 관계 하나만 바꿔 만든다.\n"
+        "- 참/거짓 판단 가능한 완전한 명제로 작성한다.\n"
+        "- 제목, 단어 나열, 'A vs B' 형태는 금지한다.\n\n"
+        "SHORT_ANSWER 규칙:\n"
+        "- options는 반드시 빈 배열 []이다.\n"
+        "- question에는 반드시 ___가 포함되어야 한다.\n"
+        "- ___는 문장 맨 앞이나 맨 끝이 아니라 핵심 개념어 위치에 둔다.\n"
+        "- answer는 source_sentence에 실제로 등장하는 핵심 개념어 또는 짧은 명사구다.\n"
+        "- answer에 '초기', '확인', '방울', '경우', '과정', '방법', '결과', '상태' 같은 일반 단어를 쓰지 마라.\n"
+        "- accepted_answers에는 띄어쓰기 차이 등 허용 가능한 유사 정답을 넣어도 된다.\n\n"
+        "SUBJECTIVE 규칙:\n"
+        "- options는 반드시 빈 배열 []이다.\n"
+        "- answer는 학생 답안이 아니라 모범답안이다.\n"
+        "- question은 설명, 비교, 이유, 적용을 요구해야 한다.\n"
+        "- rubric 또는 grading_keywords를 반드시 제공한다.\n"
+        "- rubric은 2~4개 기준으로 작성한다.\n"
+        "- 원문에 없는 확장 지식으로 채점 기준을 만들지 마라.\n\n"
         f"출력 형식: {json.dumps(output_schema, ensure_ascii=False, separators=(',', ':'))}\n\n"
         f"입력 items: {json.dumps(compact_materials, ensure_ascii=False, separators=(',', ':'))}"
     )
@@ -944,6 +1189,45 @@ def normalize_for_ai_match(value: str) -> str:
         str(value or "").lower(),
     )
 
+def is_keyword_choice_like_multiple_choice_answer(
+    answer: str,
+    material: Dict[str, Any],
+) -> bool:
+    """
+    객관식 정답이 단순 개념명/키워드만 고르는 KEYWORD_CHOICE 형태인지 판단합니다.
+
+    짧다는 이유만으로 탈락시키지 않습니다.
+    실제 concept_label 또는 keyword와 거의 동일할 때만 탈락시킵니다.
+    """
+    normalized_answer = normalize_for_ai_match(answer)
+
+    if not normalized_answer:
+        return True
+
+    concept_label = normalize_ai_text(material.get("concept_label"))
+    original_concept_name = normalize_ai_text(material.get("original_concept_name"))
+
+    keyword_like_items = [
+        concept_label,
+        original_concept_name,
+        *(material.get("keywords") or []),
+    ]
+
+    normalized_keyword_items = {
+        normalize_for_ai_match(item)
+        for item in keyword_like_items
+        if normalize_for_ai_match(item)
+    }
+
+    if normalized_answer in normalized_keyword_items:
+        return True
+
+    # 너무 짧고 조사/설명 구조가 없는 단어형 답만 차단합니다.
+    if len(normalized_answer) <= 4:
+        return True
+
+    return False
+
 
 def extract_focus_terms(value: str) -> List[str]:
     terms = re.split(r"[^0-9A-Za-z가-힣]+", str(value or ""))
@@ -954,71 +1238,437 @@ def extract_focus_terms(value: str) -> List[str]:
     ])
 
 
+SEMANTIC_FOCUS_MARKERS = (
+    "의사결정",
+    "사회적",
+    "선택",
+    "영향",
+    "예측",
+    "게임이론",
+    "게임",
+    "전략",
+    "최상의대응",
+    "최적의전략",
+    "순수전략",
+    "혼합전략",
+    "내시",
+    "내시균형",
+    "죄수의딜레마",
+    "자백",
+    "부인",
+    "침묵",
+    "협동",
+    "변절",
+    "성과행렬",
+    "효용",
+    "일회성",
+    "반복적",
+    "맞대응",
+    "파블로프",
+    "강화학습",
+    "공공재",
+    "무임승차",
+    "처벌",
+    "명성",
+    "마음이론",
+    "재귀적",
+    "사회적지능",
+)
+
+WEAK_FOCUS_TERMS = {
+    "내용",
+    "경우",
+    "과정",
+    "방법",
+    "결과",
+    "상태",
+    "선택",
+    "설명",
+    "문제",
+    "부분",
+    "활동",
+    "수준",
+}
+
+
+def extract_material_focus_markers(material: Dict[str, Any]) -> List[str]:
+    """
+    concept_label이 잘못 추출된 경우에도 source_sentences 기반으로
+    문제 초점 검증을 할 수 있게 핵심 표지를 추출합니다.
+    """
+    texts = []
+
+    for key in ("concept_label", "original_concept_name", "best_source_sentence"):
+        value = normalize_ai_text(material.get(key))
+        if value:
+            texts.append(value)
+
+    for keyword in material.get("keywords") or []:
+        value = normalize_ai_text(keyword)
+        if value:
+            texts.append(value)
+
+    for sentence in material.get("source_sentences") or []:
+        value = normalize_ai_text(sentence)
+        if value:
+            texts.append(value)
+
+    material_blob = normalize_for_ai_match(" ".join(texts))
+    markers = []
+
+    for marker in SEMANTIC_FOCUS_MARKERS:
+        normalized_marker = normalize_for_ai_match(marker)
+        if normalized_marker and normalized_marker in material_blob:
+            markers.append(marker)
+
+    for text in texts:
+        for term in extract_focus_terms(text):
+            normalized_term = normalize_for_ai_match(term)
+
+            if len(normalized_term) < 3:
+                continue
+
+            if normalized_term in {
+                normalize_for_ai_match(item)
+                for item in WEAK_FOCUS_TERMS
+            }:
+                continue
+
+            # 너무 긴 문장 조각은 focus term으로 쓰지 않습니다.
+            if len(normalized_term) > 20:
+                continue
+
+            markers.append(term)
+
+    return unique_keep_order(markers)
+
+
 def is_quiz_focused_on_material(
     question: str,
     answer: str,
     material: Dict[str, Any],
 ) -> bool:
     """
-    AI가 엉뚱한 source_sentence의 세부 예시만 묻고,
-    실제 concept_label과 무관한 문제를 만드는 경우를 차단합니다.
+    AI가 만든 문제가 해당 material과 관련 있는지 확인합니다.
+
+    기존 방식은 concept_label/keywords만 봐서,
+    concept_label이 '선택해야함 어려움'처럼 잘못 추출되면
+    정상적인 문제도 탈락시키는 문제가 있었습니다.
+
+    이제 source_sentences에서 추출한 핵심 표지까지 함께 사용합니다.
     """
-    concept_label = normalize_ai_text(material.get("concept_label"))
-    keywords = [
-        normalize_ai_text(keyword)
-        for keyword in material.get("keywords") or []
-        if normalize_ai_text(keyword)
-    ]
-
-    focus_terms = extract_focus_terms(concept_label)
-
-    # label이 'RNA-DNA/단백질 위임'이면 RNA, DNA, 단백질, 위임 중 일부가 문제/정답에 드러나도 허용합니다.
     target_text = normalize_for_ai_match(f"{question} {answer}")
 
-    if focus_terms:
-        matched_count = sum(
-            1
-            for term in focus_terms
-            if normalize_for_ai_match(term) in target_text
-        )
+    if not target_text:
+        return False
 
-        if matched_count > 0:
-            return True
+    markers = extract_material_focus_markers(material)
 
-    # concept_label이 짧거나 분해가 어려운 경우 keyword로 보조 판단합니다.
-    for keyword in keywords:
-        normalized_keyword = normalize_for_ai_match(keyword)
-        if len(normalized_keyword) >= 3 and normalized_keyword in target_text:
+    # marker를 만들 수 없으면 source_sentence 검증에 맡기고 통과시킵니다.
+    # 이미 clean_batch_ai_quiz에서 source_sentence가 allowed_sources 안에 있는지 확인합니다.
+    if not markers:
+        return True
+
+    for marker in markers:
+        normalized_marker = normalize_for_ai_match(marker)
+
+        if len(normalized_marker) < 2:
+            continue
+
+        if normalized_marker in target_text:
             return True
 
     return False
 
 
+def is_ambiguous_misconception_multiple_choice_for_ai(
+    quiz_type: str,
+    question: str,
+    options: List[str],
+) -> bool:
+    if quiz_type != "MULTIPLE_CHOICE":
+        return False
+
+    normalized_question = normalize_for_ai_match(question)
+
+    ambiguous_question_markers = (
+        "어떤오해인가",
+        "무엇이오해인가",
+        "어떤오해",
+        "잘못된해석은",
+        "잘못된관점은",
+        "틀린해석은",
+        "옳지않은것은",
+        "관련없는것은",
+    )
+
+    if any(marker in normalized_question for marker in ambiguous_question_markers):
+        return True
+
+    normalized_options = [
+        normalize_for_ai_match(option)
+        for option in options
+    ]
+
+    misconception_like_count = 0
+    for option in normalized_options:
+        if any(
+            marker in option
+            for marker in (
+                "의미한다",
+                "보장한다",
+                "유도한다",
+                "정당화한다",
+                "완전히설명한다",
+                "설계되었다",
+            )
+        ):
+            misconception_like_count += 1
+
+    return misconception_like_count >= 3
+
+def get_best_response_optimal_strategy_reject_reason(
+    question: str,
+    answer: str,
+    options: List[str],
+    explanation: str,
+    source_sentences: List[str],
+) -> Optional[str]:
+    """
+    '최상의 대응'과 '최적의 전략'의 관계를 원문과 다르게 설명하는 문항을 차단합니다.
+    """
+    output_text = " ".join([question, answer, explanation, *options])
+    output = normalize_for_ai_match(output_text)
+
+    has_best_or_optimal = (
+        "최상의대응" in output
+        or "bestresponse" in output
+        or "최적의전략" in output
+        or "optimalstrategy" in output
+    )
+
+    if not has_best_or_optimal:
+        return None
+
+    bad_optimal_strategy_patterns = (
+        "최적의전략은모든가능한상대전략",
+        "최적의전략은모든경우",
+        "최적의전략은기대효용",
+        "모든가능한상대전략에대해기대효용",
+        "모든상대전략에대해기대효용",
+        "모든가능한전략에대해기대효용",
+        "기대효용을최대화하는전략",
+    )
+
+    if any(pattern in output for pattern in bad_optimal_strategy_patterns):
+        correct_output_markers = (
+            "모든선수가동시에최상의대응",
+            "동시에최상의대응을선택",
+            "최상의대응을선택할때주어지는전략",
+        )
+
+        if not any(marker in output for marker in correct_output_markers):
+            return (
+                "최적의 전략을 원문 정의와 다르게 "
+                "'모든 가능한 상대 전략에 대한 기대효용 최대화'로 설명했습니다."
+            )
+
+    bad_best_response_patterns = (
+        "최상의대응은모든상대전략",
+        "최상의대응은상대전략을무시",
+        "최상의대응은무작위전략",
+    )
+
+    if any(pattern in output for pattern in bad_best_response_patterns):
+        return "최상의 대응의 의미를 원문과 다르게 설명했습니다."
+
+    return None
+
+
+def has_nash_misconception_correction_context(text: str) -> bool:
+    normalized = normalize_for_ai_match(text)
+
+    correction_markers = (
+        "왜잘못",
+        "잘못된가",
+        "잘못된해석",
+        "잘못된관점",
+        "오해",
+        "아니다",
+        "아니며",
+        "정당화한다고보는관점",
+        "정당화한다고보는것",
+        "보장한다고보는관점",
+        "게임이론의예상이빗나",
+        "가정이잘못",
+    )
+
+    return any(marker in normalized for marker in correction_markers)
+
+
+def get_semantic_quality_reject_reason(
+    quiz_type: str,
+    question: str,
+    answer: str,
+    options: List[str],
+    explanation: str,
+    source_sentences: List[str],
+) -> Optional[str]:
+    """
+    형식은 맞지만 원문 의미를 왜곡하는 문항을 차단합니다.
+    오개념을 교정하는 질문은 허용하고, 오개념을 사실처럼 단정하는 질문만 차단합니다.
+    """
+    combined_text = " ".join([
+        question,
+        answer,
+        explanation,
+        *options,
+    ])
+
+    combined = normalize_for_ai_match(combined_text)
+    question_norm = normalize_for_ai_match(question)
+    answer_norm = normalize_for_ai_match(answer)
+    source_blob = normalize_for_ai_match(" ".join(source_sentences))
+
+    best_optimal_reject_reason = get_best_response_optimal_strategy_reject_reason(
+        question=question,
+        answer=answer,
+        options=options,
+        explanation=explanation,
+        source_sentences=source_sentences,
+    )
+    if best_optimal_reject_reason:
+        return best_optimal_reject_reason
+
+    bad_nash_cooperation_patterns = (
+        "협동이내시균형",
+        "협동은내시균형",
+        "협동을내시균형",
+        "협동이내쉬균형",
+        "협동은내쉬균형",
+        "내시균형으로협동",
+        "내쉬균형으로협동",
+        "내시균형이협동을정당화",
+        "내쉬균형이협동을정당화",
+        "내시균형때문에협동",
+        "내쉬균형때문에협동",
+        "내시균형이협동을보장",
+        "내쉬균형이협동을보장",
+    )
+
+    if any(pattern in combined for pattern in bad_nash_cooperation_patterns):
+        if not has_nash_misconception_correction_context(combined_text):
+            return "내시 균형과 협동의 관계를 원문 흐름과 다르게 왜곡했습니다."
+
+    if "파블로프" in source_blob or "pavlov" in source_blob:
+        unsupported_pavlov_patterns = (
+            "상대방행동을예측",
+            "상대행동을예측",
+            "상대방의행동을예측",
+            "상대의행동을예측",
+            "상대행동예측",
+            "보상을조정",
+            "보상조정",
+            "보상수준조정",
+            "보상에따라상대",
+        )
+
+        if any(pattern in combined for pattern in unsupported_pavlov_patterns) and not any(
+            pattern in source_blob
+            for pattern in unsupported_pavlov_patterns
+        ):
+            return "파블로프 전략 설명에 source에 없는 상대 행동 예측/보상 조정 내용을 추가했습니다."
+
+    is_prisoners_dilemma_context = (
+        "죄수의딜레마" in source_blob
+        or "두죄수" in source_blob
+        or "자백" in source_blob
+        or "부인" in source_blob
+    )
+
+    shallow_fact_patterns = (
+        "모두징역1년",
+        "모두죄를부인하면징역1년",
+        "모두부인하면징역1년",
+        "두죄수가모두죄를부인",
+    )
+
+    shallow_question_markers = (
+        "몇년",
+        "얼마",
+        "형량",
+        "결과는무엇",
+        "어떻게되는가",
+    )
+
+    understanding_markers = (
+        "왜",
+        "어째서",
+        "딜레마가발생",
+        "충돌",
+        "개인최적",
+        "공동최적",
+        "최상의대응",
+        "내시균형",
+        "내쉬균형",
+        "협동",
+        "변절",
+        "비교",
+        "관계",
+    )
+
+    if is_prisoners_dilemma_context and quiz_type == "MULTIPLE_CHOICE":
+        fact_only = any(pattern in f"{question_norm}{answer_norm}" for pattern in shallow_fact_patterns)
+        shallow_ask = any(marker in question_norm for marker in shallow_question_markers)
+        has_understanding_goal = any(marker in question_norm for marker in understanding_markers)
+
+        if fact_only and shallow_ask and not has_understanding_goal:
+            return "죄수의 딜레마를 형량 사실 확인으로만 묻고 있어 이해도 체크 목적에 약합니다."
+
+    return None
+
 def clean_batch_ai_quiz(
     raw_quiz: Dict[str, Any],
     material_map: Dict[int, Dict[str, Any]],
     option_count: int,
-) -> Optional[Dict]:
+) -> Tuple[Optional[Dict], Optional[str]]:
     """
     AI batch 응답 한 건을 material과 대조해 유효한 퀴즈만 반환합니다.
+
+    핵심 정책:
+    - AI가 최종 문제를 생성한다.
+    - 알고리즘은 형식/근거/환각/정답 노출 검증만 수행한다.
+    - 기존 BLANK/DEFINITION/KEYWORD_CHOICE는 최종 타입으로 저장하지 않는다.
     """
+
+    def reject(reason: str) -> Tuple[None, str]:
+        return None, reason
+
     try:
         concept_id = int(raw_quiz.get("concept_id"))
     except Exception:
-        return None
+        return reject("concept_id를 int로 변환할 수 없습니다.")
 
     material = material_map.get(concept_id)
     if not material:
-        return None
+        return reject("material_map에서 concept_id를 찾지 못했습니다.")
 
-    quiz_type = normalize_ai_text(raw_quiz.get("quiz_type") or "DEFINITION").upper()
-    if quiz_type not in SUPPORTED_GENERATED_QUIZ_TYPES:
-        quiz_type = "DEFINITION"
+    quiz_type = canonicalize_ai_quiz_type(
+        raw_quiz.get("quiz_type"),
+        default=canonicalize_ai_quiz_type(
+            material.get("preferred_quiz_type"),
+            default="MULTIPLE_CHOICE",
+        ),
+    )
 
     question = normalize_ai_text(raw_quiz.get("question"))
     answer = normalize_ai_text(raw_quiz.get("answer"))
     explanation = normalize_ai_text(raw_quiz.get("explanation"))
     source_sentence = normalize_ai_text(raw_quiz.get("source_sentence"))
+
+    accepted_answers = normalize_string_list(raw_quiz.get("accepted_answers"), max_items=5)
+    grading_keywords = normalize_string_list(raw_quiz.get("grading_keywords"), max_items=6)
+    rubric = normalize_string_list(raw_quiz.get("rubric") or raw_quiz.get("grading_rubric"), max_items=5)
 
     allowed_sources = [
         normalize_ai_text(sentence)
@@ -1026,10 +1676,13 @@ def clean_batch_ai_quiz(
         if normalize_ai_text(sentence)
     ]
 
+    if not allowed_sources:
+        return reject("material에 허용된 source_sentences가 없습니다.")
+
     if source_sentence not in allowed_sources:
         source_sentence = normalize_ai_text(material.get("best_source_sentence"))
 
-    if source_sentence not in allowed_sources and allowed_sources:
+    if source_sentence not in allowed_sources:
         source_sentence = allowed_sources[0]
 
     source_sentence = select_stronger_source_sentence(
@@ -1037,52 +1690,121 @@ def clean_batch_ai_quiz(
         allowed_sources=allowed_sources,
     )
 
-    if quiz_type == "OX":
-        statement = question.split("\n\n")[-1].strip()
-        if not is_valid_ox_statement(statement):
-            raise AIQuizGenerationError("OX 문제가 참/거짓 판단 가능한 명제가 아닙니다.")
+    if not question:
+        return reject("question이 비어 있습니다.")
 
-    if quiz_type == "BLANK" and is_bad_blank_question_shape(question):
-        raise AIQuizGenerationError("BLANK 문제가 원문 조각 맞추기 형태입니다.")
+    if not answer:
+        return reject("answer가 비어 있습니다.")
 
-    if quiz_type != "OX" and not is_answer_grounded_in_source(answer, source_sentence):
-        raise AIQuizGenerationError("정답과 source_sentence의 근거가 일치하지 않습니다.")
-    
+    if not source_sentence:
+        return reject("source_sentence가 비어 있습니다.")
+
+    if source_sentence not in allowed_sources:
+        return reject("source_sentence가 허용된 material source_sentences 안에 없습니다.")
+
+    if is_cut_or_dangling_text(source_sentence):
+        return reject("source_sentence가 잘린 문장 또는 불완전한 문장입니다.")
+
     options = normalize_ai_quiz_options(raw_quiz.get("options"))
 
-    if quiz_type == "OX":
-        options = ["O", "X"]
-        if answer not in options:
-            answer = "O"
-    else:
+    if quiz_type == "MULTIPLE_CHOICE":
         if len(options) != option_count:
-            return None
+            return reject(
+                f"MULTIPLE_CHOICE options 개수가 option_count와 다릅니다. "
+                f"options_count={len(options)}, option_count={option_count}"
+            )
 
         if answer not in options:
-            return None
+            return reject("MULTIPLE_CHOICE answer가 options 안에 없습니다.")
+
+        if is_ambiguous_misconception_multiple_choice_for_ai(
+            quiz_type=quiz_type,
+            question=question,
+            options=options,
+        ):
+            return reject(
+                "객관식에서 모호한 오해/잘못된 해석 고르기 형태입니다. 이유를 묻는 문항으로 바꿔야 합니다."
+            )
+
+        if is_answer_exposed_in_question(quiz_type, question, answer):
+            return reject("question에 answer가 그대로 노출되어 있습니다.")
+
+        if any(is_cut_or_dangling_text(option) for option in options):
+            return reject("MULTIPLE_CHOICE options 중 잘린 문장 또는 불완전한 문장이 있습니다.")
+
+        # 객관식 정답이 너무 짧은 핵심어 하나면 KEYWORD_CHOICE가 되므로 제외합니다.
+        if is_keyword_choice_like_multiple_choice_answer(answer, material):
+            return reject("MULTIPLE_CHOICE 정답이 단순 핵심어만 고르는 KEYWORD_CHOICE 형태입니다.")
+
+    elif quiz_type == "OX":
+        options = ["O", "X"]
+
+        if answer not in options:
+            return reject("OX answer가 O 또는 X가 아닙니다.")
+
+        statement = question.split("\n\n")[-1].strip()
+        if not is_valid_ox_statement(statement):
+            return reject("OX 문제가 참/거짓 판단 가능한 완전한 명제가 아닙니다.")
+
+    elif quiz_type == "SHORT_ANSWER":
+        options = []
+
+        if "___" not in question:
+            return reject("SHORT_ANSWER question에 빈칸 표시 ___가 없습니다.")
+
+        if is_bad_blank_question_shape(question):
+            return reject("SHORT_ANSWER question의 빈칸 형태가 적절하지 않습니다.")
+
+        if not is_good_blank_answer(answer):
+            return reject("SHORT_ANSWER answer가 핵심 개념어로 적절하지 않습니다.")
+
+        if not is_short_answer_grounded_in_source(answer, source_sentence):
+            return reject("SHORT_ANSWER answer가 source_sentence에 충분히 근거하지 않습니다.")
+
+        if is_answer_exposed_in_question(quiz_type, question, answer):
+            return reject("question에 answer가 그대로 노출되어 있습니다.")
+
+    elif quiz_type == "SUBJECTIVE":
+        options = []
+
+        if len(compact_text(answer)) < 12:
+            return reject("SUBJECTIVE answer가 너무 짧습니다.")
+
+        if is_cut_or_dangling_text(answer):
+            return reject("SUBJECTIVE answer가 잘린 문장 또는 불완전한 문장입니다.")
+
+        if not explanation and not rubric and not grading_keywords:
+            return reject("SUBJECTIVE에 explanation, rubric, grading_keywords가 모두 없습니다.")
+
+        explanation = format_subjective_explanation(
+            explanation=explanation,
+            rubric=rubric,
+            grading_keywords=grading_keywords,
+        )
+
+    else:
+        return reject(f"지원하지 않는 quiz_type입니다. quiz_type={quiz_type}")
 
     if not is_quiz_focused_on_material(
         question=question,
         answer=answer,
         material=material,
     ):
-        return None
+        return reject("문제/정답이 material의 concept_label, keyword, source_sentence와 충분히 관련되지 않습니다.")
 
-    if not question or not answer or not source_sentence:
-        return None
+    semantic_reject_reason = get_semantic_quality_reject_reason(
+        quiz_type=quiz_type,
+        question=question,
+        answer=answer,
+        options=options,
+        explanation=explanation,
+        source_sentences=allowed_sources,
+    )
+    if semantic_reject_reason:
+        return reject(semantic_reject_reason)
 
-    if quiz_type == "KEYWORD_CHOICE" and not is_good_short_answer(answer):
-        return None
-
-    if quiz_type == "BLANK" and not is_good_blank_answer(answer):
-        return None
-
-    if any(is_cut_or_dangling_text(option) for option in options):
-        return None
-    
     if not explanation:
         explanation = f"원문 근거: {source_sentence}"
-
 
     concept_label = normalize_ai_text(material.get("concept_label"))
     original_concept_name = normalize_ai_text(material.get("original_concept_name"))
@@ -1101,6 +1823,10 @@ def clean_batch_ai_quiz(
         "answer": answer,
         "explanation": explanation,
         "source_sentence": source_sentence,
+        "source_sentences": allowed_sources,
+        "accepted_answers": accepted_answers,
+        "grading_keywords": grading_keywords,
+        "rubric": rubric,
     }
 
     validation_error = validate_generated_quiz_dict(
@@ -1108,12 +1834,12 @@ def clean_batch_ai_quiz(
         option_count=option_count,
     )
     if validation_error:
-        return None
+        return reject(f"validate_generated_quiz_dict 실패: {validation_error}")
 
     if is_answer_exposed_in_question(quiz_type, question, answer):
-        return None
+        return reject("question에 answer가 그대로 노출되어 있습니다.")
 
-    return cleaned_quiz
+    return cleaned_quiz, None
 
 
 def parse_batch_ai_quizzes(
@@ -1139,13 +1865,23 @@ def parse_batch_ai_quizzes(
         if not isinstance(raw_quiz, dict):
             continue
 
-        cleaned = clean_batch_ai_quiz(
+        cleaned, reject_reason = clean_batch_ai_quiz(
             raw_quiz=raw_quiz,
             material_map=material_map,
             option_count=option_count,
         )
 
         if not cleaned:
+            print(
+                "[AI_QUIZ_CLEAN_REJECT] "
+                f"reason={reject_reason}, "
+                f"concept_id={raw_quiz.get('concept_id')}, "
+                f"quiz_type={raw_quiz.get('quiz_type')}, "
+                f"question={str(raw_quiz.get('question') or '')[:120]}, "
+                f"answer={str(raw_quiz.get('answer') or '')[:120]}, "
+                f"options_count={len(raw_quiz.get('options') or []) if isinstance(raw_quiz.get('options'), list) else 'not_list'}, "
+                f"source_sentence={str(raw_quiz.get('source_sentence') or '')[:120]}"
+            )
             continue
 
         concept_id = cleaned["concept_id"]
@@ -1196,51 +1932,81 @@ def generate_quizzes_with_ai_batch_once(
     option_count: int,
     batch_size: int,
     provider: Optional[str] = None,
+    quota_retry_count: int = 1,
+    request_delay_seconds: float = 0.0,
 ) -> List[Dict]:
     generated_quizzes = []
 
     for batch_index, batch in enumerate(chunk_list(materials, batch_size), start=1):
-        try:
-            print(
-                "[AI_QUIZ_BATCH_REQUEST] "
-                f"batch={batch_index}, input={len(batch)}"
-            )
+        attempt = 0
 
-            messages = build_batch_ai_messages(
-                materials=batch,
-                difficulty=difficulty,
-                option_count=option_count,
-            )
+        while True:
+            try:
+                if request_delay_seconds > 0 and not (batch_index == 1 and attempt == 0):
+                    time.sleep(request_delay_seconds)
 
-            content = call_chat_completion(messages, provider=provider)
-            payload = extract_json_payload(content)
-
-            batch_quizzes = parse_batch_ai_quizzes(
-                payload=payload,
-                materials=batch,
-                option_count=option_count,
-            )
-
-            print(
-                "[AI_QUIZ_BATCH_RESPONSE] "
-                f"batch={batch_index}, output={len(batch_quizzes)}"
-            )
-
-            generated_quizzes.extend(batch_quizzes)
-
-        except Exception as exc:
-            if is_ai_quota_exceeded_error(exc):
                 print(
-                    "[AI_QUIZ_BATCH_QUOTA_EXCEEDED] "
+                    "[AI_QUIZ_BATCH_REQUEST] "
+                    f"batch={batch_index}, "
+                    f"attempt={attempt + 1}, "
+                    f"input={len(batch)}"
+                )
+
+                messages = build_batch_ai_messages(
+                    materials=batch,
+                    difficulty=difficulty,
+                    option_count=option_count,
+                )
+
+                content = call_chat_completion(messages, provider=provider)
+                payload = extract_json_payload(content)
+
+                batch_quizzes = parse_batch_ai_quizzes(
+                    payload=payload,
+                    materials=batch,
+                    option_count=option_count,
+                )
+
+                print(
+                    "[AI_QUIZ_BATCH_RESPONSE] "
+                    f"batch={batch_index}, "
+                    f"attempt={attempt + 1}, "
+                    f"output={len(batch_quizzes)}"
+                )
+
+                generated_quizzes.extend(batch_quizzes)
+                break
+
+            except Exception as exc:
+                if is_ai_quota_exceeded_error(exc):
+                    if attempt < quota_retry_count:
+                        sleep_seconds = extract_retry_after_seconds(exc)
+                        print(
+                            "[AI_QUIZ_BATCH_QUOTA_RETRY] "
+                            f"batch={batch_index}, "
+                            f"attempt={attempt + 1}, "
+                            f"sleep={sleep_seconds:.1f}, "
+                            f"error={type(exc).__name__}: {exc}"
+                        )
+                        time.sleep(sleep_seconds)
+                        attempt += 1
+                        continue
+
+                    print(
+                        "[AI_QUIZ_BATCH_QUOTA_EXCEEDED] "
+                        f"batch={batch_index}, "
+                        f"attempt={attempt + 1}, "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    break
+
+                print(
+                    "[AI_QUIZ_BATCH_FALLBACK] "
+                    f"batch={batch_index}, "
+                    f"attempt={attempt + 1}, "
                     f"{type(exc).__name__}: {exc}"
                 )
                 break
-
-            print(
-                "[AI_QUIZ_BATCH_FALLBACK] "
-                f"batch={batch_index}, {type(exc).__name__}: {exc}"
-            )
-            continue
 
     return generated_quizzes
 
@@ -1255,6 +2021,8 @@ def generate_quizzes_with_ai_batch(
     target_max: int = 12,
     retry_missing_once: bool = True,
     provider: Optional[str] = None,
+    quota_retry_count: int = 1,
+    request_delay_seconds: float = 0.0,
 ) -> Tuple[List[Dict], int]:
     """
     material을 AI batch로 생성하고, 부족한 항목은 누락분만 한 번 재시도합니다.
@@ -1281,7 +2049,9 @@ def generate_quizzes_with_ai_batch(
         difficulty=difficulty,
         option_count=option_count,
         batch_size=batch_size,
-        provider=provider
+        provider=provider,
+        quota_retry_count=quota_retry_count,
+        request_delay_seconds=request_delay_seconds,
     )
 
     # AI 응답 중복은 concept_id 기준으로 제거합니다.
@@ -1322,6 +2092,8 @@ def generate_quizzes_with_ai_batch(
                 option_count=option_count,
                 batch_size=batch_size,
                 provider=provider,
+                quota_retry_count=quota_retry_count,
+                request_delay_seconds=request_delay_seconds,
             )
 
             generated_concept_ids = get_generated_concept_ids(generated_quizzes)
