@@ -50,7 +50,12 @@ from app.services.quiz.quiz_validation import (
 )
 
 
-router = APIRouter(tags=["Quizzes"])
+router = APIRouter()
+TEACHER_QUIZ_TAG = "Teacher Quizzes"
+STUDENT_QUIZ_TAG = "Student Quizzes"
+SHARED_QUIZ_TAG = "Shared Quizzes"
+STUDENT_VISIBLE_QUIZ_STATUS = "READY"
+STUDENT_VISIBLE_QUIZ_SET_STATUSES = {"SENT", "CLOSED"}
 
 GROQ_AI_MAX_ENHANCE_ITEMS = 3
 
@@ -142,6 +147,32 @@ def get_lecture_or_404(db: Session, lecture_id: int):
         )
 
     return lecture, None
+
+
+def is_student_visible_quiz_set(quiz_set: models.QuizSet | None) -> bool:
+    return bool(quiz_set and quiz_set.status in STUDENT_VISIBLE_QUIZ_SET_STATUSES)
+
+
+def is_student_visible_quiz(db: Session, quiz: models.Quiz) -> bool:
+    if quiz.status != STUDENT_VISIBLE_QUIZ_STATUS:
+        return False
+
+    if quiz.set_id is None:
+        return True
+
+    return is_student_visible_quiz_set(
+        quiz_set_repository.get_quiz_set_by_id(db, quiz.set_id),
+    )
+
+
+def require_teacher_user(current_user: models.User):
+    if current_user.role != "teacher":
+        return error_response(
+            status.HTTP_403_FORBIDDEN,
+            "Only teachers can manage quizzes.",
+        )
+
+    return None
 
 
 def get_quiz_or_404(
@@ -272,6 +303,7 @@ def refill_quality_quizzes(
     "/api/lectures/{lecture_id}/quizzes/generate",
     status_code=status.HTTP_201_CREATED,
     summary="Generate quizzes from extracted concepts",
+    tags=[TEACHER_QUIZ_TAG],
 )
 def generate_lecture_quizzes(
     lecture_id: int,
@@ -279,6 +311,10 @@ def generate_lecture_quizzes(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    teacher_error = require_teacher_user(current_user)
+    if teacher_error:
+        return teacher_error
+
     lecture, error = get_lecture_or_404(db, lecture_id)
     if error:
         return error
@@ -679,12 +715,19 @@ def generate_lecture_quizzes(
     "/api/lectures/{lecture_id}/quizzes/generate/status",
     status_code=status.HTTP_200_OK,
     summary="Get latest quiz generation status",
+    tags=[TEACHER_QUIZ_TAG],
 )
 def get_quiz_generation_status(
     lecture_id: int,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    if current_user.role != "teacher":
+        return error_response(
+            status.HTTP_403_FORBIDDEN,
+            "Only teachers can view quiz generation status.",
+        )
+
     lecture, error = get_lecture_or_404(db, lecture_id)
     if error:
         return error
@@ -740,6 +783,7 @@ def get_quiz_generation_status(
     response_model=schemas.LectureQuizSetsWithQuizzesResponse,
     status_code=status.HTTP_200_OK,
     summary="Get lecture quizzes",
+    tags=[SHARED_QUIZ_TAG],
 )
 def get_lecture_quizzes(
     lecture_id: int,
@@ -763,6 +807,12 @@ def get_lecture_quizzes(
         if status_error:
             return status_error
 
+    student_requested_hidden_status = (
+        current_user.role == "student"
+        and normalized_status is not None
+        and normalized_status != STUDENT_VISIBLE_QUIZ_STATUS
+    )
+
     if set_id is not None:
         if not quiz_model_supports_set_id():
             return error_response(
@@ -775,22 +825,47 @@ def get_lecture_quizzes(
                 status.HTTP_404_NOT_FOUND,
                 "Quiz set not found for this lecture.",
             )
+        if current_user.role == "student" and not is_student_visible_quiz_set(quiz_set):
+            return error_response(
+                status.HTTP_404_NOT_FOUND,
+                "Quiz set not found for this lecture.",
+            )
         quiz_sets = [quiz_set]
     else:
         quiz_sets = quiz_set_repository.get_quiz_sets_by_lecture(
             db=db,
             lecture_id=lecture_id,
         )
+        if current_user.role == "student":
+            quiz_sets = [
+                quiz_set
+                for quiz_set in quiz_sets
+                if is_student_visible_quiz_set(quiz_set)
+            ]
 
-    quizzes = quiz_repository.get_lecture_quizzes(
-        db=db,
-        lecture_id=lecture_id,
-        quiz_status=normalized_status,
-        page_start=page_start,
-        page_end=page_end,
-        concept_id=concept_id,
-        set_id=set_id,
-    )
+    if current_user.role == "student":
+        normalized_status = STUDENT_VISIBLE_QUIZ_STATUS
+
+    if student_requested_hidden_status:
+        quizzes = []
+    else:
+        quizzes = quiz_repository.get_lecture_quizzes(
+            db=db,
+            lecture_id=lecture_id,
+            quiz_status=normalized_status,
+            page_start=page_start,
+            page_end=page_end,
+            concept_id=concept_id,
+            set_id=set_id,
+        )
+
+    if current_user.role == "student":
+        visible_set_ids = {quiz_set.id for quiz_set in quiz_sets}
+        quizzes = [
+            quiz
+            for quiz in quizzes
+            if quiz.set_id is None or quiz.set_id in visible_set_ids
+        ]
 
     concept_ids = [quiz.concept_id for quiz in quizzes if quiz.concept_id]
     concepts = concept_repository.get_concepts_by_ids(db, concept_ids) if concept_ids else []
@@ -826,6 +901,7 @@ def get_lecture_quizzes(
     "/api/lectures/{lecture_id}/quiz-sets",
     status_code=status.HTTP_200_OK,
     summary="Get quiz sets for a lecture",
+    tags=[SHARED_QUIZ_TAG],
 )
 def get_lecture_quiz_sets(
     lecture_id: int,
@@ -844,11 +920,25 @@ def get_lecture_quiz_sets(
         if status_error:
             return status_error
 
-    quiz_sets = quiz_set_repository.get_quiz_sets_by_lecture(
-        db=db,
-        lecture_id=lecture_id,
-        set_status=normalized_status,
-    )
+    if (
+        current_user.role == "student"
+        and normalized_status is not None
+        and normalized_status not in STUDENT_VISIBLE_QUIZ_SET_STATUSES
+    ):
+        quiz_sets = []
+    else:
+        quiz_sets = quiz_set_repository.get_quiz_sets_by_lecture(
+            db=db,
+            lecture_id=lecture_id,
+            set_status=normalized_status,
+        )
+
+    if current_user.role == "student":
+        quiz_sets = [
+            quiz_set
+            for quiz_set in quiz_sets
+            if is_student_visible_quiz_set(quiz_set)
+        ]
 
     return {
         "lecture_id": lecture_id,
@@ -861,6 +951,11 @@ def get_lecture_quiz_sets(
                         db=db,
                         lecture_id=lecture_id,
                         set_id=quiz_set.id,
+                        quiz_status=(
+                            STUDENT_VISIBLE_QUIZ_STATUS
+                            if current_user.role == "student"
+                            else None
+                        ),
                     )
                 ),
             )
@@ -874,6 +969,7 @@ def get_lecture_quiz_sets(
     response_model=schemas.SubmissionResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Submit answers for a lecture quiz set",
+    tags=[STUDENT_QUIZ_TAG],
 )
 def submit_quiz_set_answers(
     lecture_id: int,
@@ -1003,6 +1099,7 @@ def submit_quiz_set_answers(
     "/api/quiz-sets/{set_id}/status",
     status_code=status.HTTP_200_OK,
     summary="Update quiz set status",
+    tags=[TEACHER_QUIZ_TAG],
 )
 def update_quiz_set_status(
     set_id: int,
@@ -1010,6 +1107,10 @@ def update_quiz_set_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    teacher_error = require_teacher_user(current_user)
+    if teacher_error:
+        return teacher_error
+
     quiz_set = quiz_set_repository.get_quiz_set_by_id(db, set_id)
     if not quiz_set:
         return error_response(
@@ -1039,6 +1140,7 @@ def update_quiz_set_status(
     "/api/quizzes/{quiz_id}",
     status_code=status.HTTP_200_OK,
     summary="Get quiz detail",
+    tags=[SHARED_QUIZ_TAG],
 )
 def get_quiz_detail(
     quiz_id: int,
@@ -1048,6 +1150,12 @@ def get_quiz_detail(
     quiz, error = get_quiz_or_404(db, quiz_id)
     if error:
         return error
+
+    if current_user.role == "student" and not is_student_visible_quiz(db, quiz):
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "Quiz not found.",
+        )
 
     concept = None
     if quiz.concept_id:
@@ -1065,6 +1173,12 @@ def get_closed_quiz_for_memo(db: Session, quiz_id: int):
         return None, error_response(
             status.HTTP_400_BAD_REQUEST,
             "Deleted quizzes cannot have memos.",
+        )
+
+    if quiz.status != STUDENT_VISIBLE_QUIZ_STATUS:
+        return None, error_response(
+            status.HTTP_404_NOT_FOUND,
+            "Quiz not found.",
         )
 
     lecture, error = get_lecture_or_404(db, quiz.lecture_id)
@@ -1098,6 +1212,7 @@ def get_closed_quiz_for_memo(db: Session, quiz_id: int):
     response_model=schemas.MemoResponse,
     status_code=status.HTTP_200_OK,
     summary="Create or update memo for a closed quiz",
+    tags=[STUDENT_QUIZ_TAG],
 )
 def upsert_quiz_memo(
     quiz_id: int,
@@ -1142,6 +1257,7 @@ def upsert_quiz_memo(
     response_model=schemas.MemoResponse,
     status_code=status.HTTP_200_OK,
     summary="Update memo for a closed quiz",
+    tags=[STUDENT_QUIZ_TAG],
 )
 def update_quiz_memo(
     quiz_id: int,
@@ -1190,6 +1306,7 @@ def update_quiz_memo(
     response_model=schemas.QuizMutationResponse,
     status_code=status.HTTP_200_OK,
     summary="Regenerate one quiz in a quiz set",
+    tags=[TEACHER_QUIZ_TAG],
 )
 def regenerate_quiz(
     quiz_id: int,
@@ -1198,6 +1315,10 @@ def regenerate_quiz(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    teacher_error = require_teacher_user(current_user)
+    if teacher_error:
+        return teacher_error
+
     quiz, error = get_quiz_or_404(db, quiz_id, set_id)
     if error:
         return error
@@ -1312,6 +1433,7 @@ def regenerate_quiz(
     response_model=schemas.QuizMutationResponse,
     status_code=status.HTTP_200_OK,
     summary="Update quiz in a quiz set",
+    tags=[TEACHER_QUIZ_TAG],
 )
 def update_quiz(
     quiz_id: int,
@@ -1320,6 +1442,10 @@ def update_quiz(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    teacher_error = require_teacher_user(current_user)
+    if teacher_error:
+        return teacher_error
+
     quiz, error = get_quiz_or_404(db, quiz_id, set_id)
     if error:
         return error
@@ -1413,6 +1539,7 @@ def update_quiz(
     "/api/quiz-sets/{set_id}/quizzes/{quiz_id}",
     status_code=status.HTTP_200_OK,
     summary="Soft delete quiz in a quiz set",
+    tags=[TEACHER_QUIZ_TAG],
 )
 def delete_quiz(
     quiz_id: int,
@@ -1420,6 +1547,10 @@ def delete_quiz(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    teacher_error = require_teacher_user(current_user)
+    if teacher_error:
+        return teacher_error
+
     quiz, error = get_quiz_or_404(db, quiz_id, set_id)
     if error:
         return error
@@ -1448,6 +1579,7 @@ def delete_quiz(
     "/api/lectures/{lecture_id}/quizzes",
     status_code=status.HTTP_201_CREATED,
     summary="Create manual quiz",
+    tags=[TEACHER_QUIZ_TAG],
 )
 def create_manual_quiz(
     lecture_id: int,
@@ -1455,6 +1587,10 @@ def create_manual_quiz(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    teacher_error = require_teacher_user(current_user)
+    if teacher_error:
+        return teacher_error
+
     lecture, error = get_lecture_or_404(db, lecture_id)
     if error:
         return error
@@ -1548,6 +1684,7 @@ def create_manual_quiz(
     "/api/quiz-sets/{set_id}/quizzes/{quiz_id}/status",
     status_code=status.HTTP_200_OK,
     summary="Update quiz status in a quiz set",
+    tags=[TEACHER_QUIZ_TAG],
 )
 def update_quiz_status(
     quiz_id: int,
@@ -1556,6 +1693,10 @@ def update_quiz_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    teacher_error = require_teacher_user(current_user)
+    if teacher_error:
+        return teacher_error
+
     quiz, error = get_quiz_or_404(db, quiz_id, set_id)
     if error:
         return error
