@@ -130,7 +130,7 @@ class ManualQuizCreateRequest(BaseModel):
     source_sentence: Optional[str] = None
 
     page: int
-    status: str = "DRAFT"
+    status: str = "ACTIVE"
 
 
 class QuizStatusUpdateRequest(BaseModel):

@@ -46,7 +46,6 @@ from app.services.quiz.quiz_validation import (
     validate_quiz_set_status,
     validate_quiz_status,
     validate_quiz_type,
-    validate_ready_quiz,
 )
 
 
@@ -54,7 +53,6 @@ router = APIRouter()
 TEACHER_QUIZ_TAG = "Teacher Quizzes"
 STUDENT_QUIZ_TAG = "Student Quizzes"
 SHARED_QUIZ_TAG = "Shared Quizzes"
-STUDENT_VISIBLE_QUIZ_STATUS = "READY"
 STUDENT_VISIBLE_QUIZ_SET_STATUSES = {"SENT", "CLOSED"}
 
 GROQ_AI_MAX_ENHANCE_ITEMS = 3
@@ -62,7 +60,7 @@ GROQ_AI_MAX_ENHANCE_ITEMS = 3
 
 def quiz_model_supports_generation_job_id() -> bool:
     """
-    Quiz 모델의 generation_job_id 지원 여부를 확인합니다.
+    현재 Quiz 모델이 generation_job_id 필드를 지원하는지 확인합니다.
     """
     return hasattr(models.Quiz, "generation_job_id")
 
@@ -75,9 +73,9 @@ def get_quiz_display_concept(
     concept: Optional[models.Concept] = None,
 ) -> Optional[str]:
     """
-    응답에 노출할 concept 이름을 정제합니다.
-    DB의 Concept.concept_name은 추출 원본이라 길거나 깨진 문장일 수 있으므로,
-    source_sentence와 keyword 기반 label을 우선 사용합니다.
+    퀴즈에 노출할 개념명을 결정합니다.
+
+    원문 문장에서 추론한 라벨을 우선 사용하고, 없으면 DB 개념명을 정제해 사용합니다.
     """
     inferred_label = infer_concept_label_from_source_sentence(
         quiz.source_sentence or ""
@@ -154,11 +152,11 @@ def is_student_visible_quiz_set(quiz_set: models.QuizSet | None) -> bool:
 
 
 def is_student_visible_quiz(db: Session, quiz: models.Quiz) -> bool:
-    if quiz.status != STUDENT_VISIBLE_QUIZ_STATUS:
+    if quiz.status == "DELETED":
         return False
 
     if quiz.set_id is None:
-        return True
+        return False
 
     return is_student_visible_quiz_set(
         quiz_set_repository.get_quiz_set_by_id(db, quiz.set_id),
@@ -226,7 +224,7 @@ def get_latest_job_quizzes_query(
     latest_job: models.QuizGenerationJob,
 ):
     """
-    generation_job_id가 없는 배포본은 생성 시점과 요청 범위로 최신 결과를 조회합니다.
+    최신 생성 작업과 연결된 퀴즈 조회 쿼리를 반환합니다.
     """
     return quiz_repository.get_latest_job_quizzes_query(
         db=db,
@@ -244,8 +242,8 @@ def refill_quality_quizzes(
     target_quiz_count: int,
 ) -> tuple[list[dict], int]:
     """
-    품질 gate 후 문항 수가 부족할 때, 알고리즘 fallback 후보를 더 넓게 만들어
-    통과 가능한 문항만 보충합니다. 낮은 품질 문항으로 returned_count를 억지로 채우지 않습니다.
+    품질 검사를 통과한 문항이 부족하면 알고리즘 생성 문항으로 보충합니다.
+    중복 질문과 동일 개념-유형 조합은 제외하며, 최종 문항 수는 목표 수를 넘지 않습니다.
     """
     if len(quality_quizzes) >= target_quiz_count:
         return quality_quizzes, 0
@@ -332,7 +330,7 @@ def generate_lecture_quizzes(
     if request_data.page_start > request_data.page_end:
         return error_response(
             status.HTTP_400_BAD_REQUEST,
-            "page_start가 page_end보다 큽니다.",
+            "page_start는 page_end보다 클 수 없습니다.",
         )
 
     if lecture.total_pages and request_data.page_end > lecture.total_pages:
@@ -357,7 +355,7 @@ def generate_lecture_quizzes(
     if not all_concept_exists:
         return error_response(
             status.HTTP_400_BAD_REQUEST,
-            "분석 결과가 없습니다. /concept-extract를 먼저 호출하세요.",
+            "분석 결과가 없습니다. /api/lectures/{lecture_id}/pdf/analyze를 먼저 호출하세요.",
         )
 
     target_concepts = get_concepts_for_quiz_generation(
@@ -374,7 +372,7 @@ def generate_lecture_quizzes(
             "해당 범위에서 퀴즈를 생성할 수 있는 개념을 찾지 못했습니다.",
         )
 
-    # 페이지 범위와 사용 가능한 개념 수를 기준으로 생성 목표 수를 제한합니다.
+    # 페이지 범위와 사용 가능한 개념 수를 기준으로 생성 목표 문항 수를 계산합니다.
     target_quiz_count = calculate_target_quiz_count(
         page_start=request_data.page_start,
         page_end=request_data.page_end,
@@ -402,7 +400,7 @@ def generate_lecture_quizzes(
         quiz_type=quiz_type,
         generated_count=0,
         failed_count=0,
-        message="퀴즈 생성이 시작되었습니다.",
+        message="퀴즈 생성을 시작했습니다.",
     )
 
     quiz_generation_job_repository.create_job(db, job)
@@ -412,9 +410,9 @@ def generate_lecture_quizzes(
         ai_enhanced_count = 0
         generated_quizzes = []
 
-        # Gemini는 기존 배치 생성 로직을 유지합니다.
-        # Groq gpt-oss-20b는 JSON batch 생성이 불안정하고 TPM이 낮아서
-        # 알고리즘 초안을 먼저 만든 뒤 일부 문항만 단건 AI 개선합니다.
+        # Gemini는 기존 배치 생성을 사용합니다.
+        # Groq는 JSON 배치 응답과 TPM 제한이 불안정하므로
+        # 알고리즘 초안을 만든 뒤 일부만 AI로 개선합니다.
         if request_data.use_ai:
             ai_provider = normalize_ai_provider(request_data.ai_provider)
 
@@ -428,7 +426,7 @@ def generate_lecture_quizzes(
                 )
 
                 failed_count += algorithm_failed_count
-                # quality gate에서 일부가 제외될 수 있으므로 target보다 넓은 후보 풀을 유지합니다.
+                # 품질 검사에서 일부가 제외될 수 있으므로 목표보다 넉넉하게 후보를 확보합니다.
                 generated_quizzes = algorithm_quizzes[:min(len(algorithm_quizzes), target_quiz_count + 6)]
 
                 concept_map = {
@@ -521,7 +519,7 @@ def generate_lecture_quizzes(
                     f"ai_missing={ai_missing_count}"
                 )
 
-        # AI 결과가 없거나 일부만 생성된 경우 알고리즘 생성 결과로 목표 수량을 채웁니다.
+        # AI 결과가 없거나 부족하면 알고리즘 생성 결과로 목표 수량을 채웁니다.
         if len(generated_quizzes) < target_quiz_count:
             algorithm_quizzes, algorithm_failed_count = generate_quizzes_for_concepts(
                 concepts=target_concepts,
@@ -551,7 +549,7 @@ def generate_lecture_quizzes(
                 existing_concept_ids.add(concept_id)
                 added_algorithm_count += 1
 
-            # 완전히 비어 있던 경우에만 알고리즘 실패 수를 반영합니다.
+            # 기존 결과가 전혀 없을 때만 알고리즘 생성 실패 수를 반영합니다.
             if added_algorithm_count == 0 and not generated_quizzes:
                 failed_count += algorithm_failed_count
 
@@ -583,7 +581,7 @@ def generate_lecture_quizzes(
             "[QUIZ_GENERATE_QUALITY_RESULT] "
             f"before_quality={len(generated_quizzes)}, "
             f"after_quality={len(quality_quizzes)}, "
-            f"rejected={rejected_count}"
+            f"quality_rejected={rejected_count}"
         )
 
         if len(quality_quizzes) < target_quiz_count:
@@ -603,7 +601,7 @@ def generate_lecture_quizzes(
                 f"refill_rejected={refill_rejected_count}"
             )
             
-        # 최종 저장 수는 목표 문항 수를 초과하지 않도록 제한합니다.
+        # 최종 응답은 목표 문항 수를 넘지 않도록 제한합니다.
         if len(quality_quizzes) > target_quiz_count:
             quality_quizzes = quality_quizzes[:target_quiz_count]
 
@@ -615,8 +613,8 @@ def generate_lecture_quizzes(
             job.generated_count = 0
             job.failed_count = total_failed_count
             job.message = (
-                "퀴즈 초안은 생성되었지만 품질 기준을 통과한 퀴즈가 없습니다. "
-                f"생성 실패 {failed_count}건, 품질 제외 {rejected_count}건"
+                "퀴즈 초안은 생성됐지만 품질 기준을 통과한 퀴즈가 없습니다. "
+                f"generation_failed={failed_count}, quality_rejected={rejected_count}"
             )
             quiz_generation_job_repository.save_job(db, job)
 
@@ -658,7 +656,7 @@ def generate_lecture_quizzes(
                 explanation=item.get("explanation"),
                 source_sentence=item.get("source_sentence"),
                 page_num=item["page_num"],
-                status="DRAFT",
+                status="ACTIVE",
             )
 
             saved_quizzes.append(new_quiz)
@@ -669,9 +667,9 @@ def generate_lecture_quizzes(
         job.failed_count = total_failed_count
         job.message = (
             f"퀴즈 생성이 완료되었습니다. "
-            f"AI 개선 {ai_enhanced_count}건, "
-            f"알고리즘 fallback {len(generated_quizzes) - ai_enhanced_count}건, "
-            f"품질 제외 {rejected_count}건"
+            f"AI 개선 {ai_enhanced_count}개, "
+            f"알고리즘 보완 {len(generated_quizzes) - ai_enhanced_count}개, "
+            f"quality_rejected={rejected_count}"
         )
 
         quiz_repository.save_generated_quizzes(db, saved_quizzes)
@@ -810,7 +808,7 @@ def get_lecture_quizzes(
     student_requested_hidden_status = (
         current_user.role == "student"
         and normalized_status is not None
-        and normalized_status != STUDENT_VISIBLE_QUIZ_STATUS
+        and normalized_status == "DELETED"
     )
 
     if set_id is not None:
@@ -843,9 +841,6 @@ def get_lecture_quizzes(
                 if is_student_visible_quiz_set(quiz_set)
             ]
 
-    if current_user.role == "student":
-        normalized_status = STUDENT_VISIBLE_QUIZ_STATUS
-
     if student_requested_hidden_status:
         quizzes = []
     else:
@@ -864,7 +859,7 @@ def get_lecture_quizzes(
         quizzes = [
             quiz
             for quiz in quizzes
-            if quiz.set_id is None or quiz.set_id in visible_set_ids
+            if quiz.set_id in visible_set_ids
         ]
 
     concept_ids = [quiz.concept_id for quiz in quizzes if quiz.concept_id]
@@ -951,11 +946,6 @@ def get_lecture_quiz_sets(
                         db=db,
                         lecture_id=lecture_id,
                         set_id=quiz_set.id,
-                        quiz_status=(
-                            STUDENT_VISIBLE_QUIZ_STATUS
-                            if current_user.role == "student"
-                            else None
-                        ),
                     )
                 ),
             )
@@ -1015,13 +1005,12 @@ def submit_quiz_set_answers(
     quizzes = quiz_repository.get_lecture_quizzes(
         db=db,
         lecture_id=lecture.id,
-        quiz_status="READY",
         set_id=set_id,
     )
     if not quizzes:
         return error_response(
             status.HTTP_400_BAD_REQUEST,
-            "No READY quizzes exist in this quiz set.",
+            "No active quizzes exist in this quiz set.",
         )
 
     quiz_map = {quiz.id: quiz for quiz in quizzes}
@@ -1173,12 +1162,6 @@ def get_closed_quiz_for_memo(db: Session, quiz_id: int):
         return None, error_response(
             status.HTTP_400_BAD_REQUEST,
             "Deleted quizzes cannot have memos.",
-        )
-
-    if quiz.status != STUDENT_VISIBLE_QUIZ_STATUS:
-        return None, error_response(
-            status.HTTP_404_NOT_FOUND,
-            "Quiz not found.",
         )
 
     lecture, error = get_lecture_or_404(db, quiz.lecture_id)
@@ -1340,7 +1323,7 @@ def regenerate_quiz(
     if not concept:
         return error_response(
             status.HTTP_400_BAD_REQUEST,
-            "개념과 연결되지 않은 수동 퀴즈는 자동 재생성할 수 없습니다.",
+            "개념이 연결되지 않은 퀴즈는 자동 재생성할 수 없습니다.",
         )
 
     requested_quiz_type = request_data.quiz_type or quiz.quiz_type
@@ -1354,7 +1337,7 @@ def regenerate_quiz(
     if difficulty_error:
         return difficulty_error
 
-    # 재생성에는 대상 개념 주변 페이지의 후보만 사용합니다.
+    # 재생성에는 같은 개념 주변 페이지의 개념 정보를 함께 사용합니다.
     nearby_concepts = concept_repository.get_nearby_concepts_for_regeneration(
         db,
         quiz.lecture_id,
@@ -1395,7 +1378,7 @@ def regenerate_quiz(
     if not quality_quizzes:
         return error_response(
             status.HTTP_400_BAD_REQUEST,
-            "재생성된 퀴즈가 품질 기준을 통과하지 못했습니다. 다른 유형이나 AI 사용 옵션으로 다시 시도하세요.",
+            "재생성된 퀴즈가 품질 기준을 통과하지 못했습니다. 다른 유형이나 AI 사용 옵션으로 다시 시도해 주세요.",
         )
 
     regenerated_quiz = quality_quizzes[0]
@@ -1407,7 +1390,7 @@ def regenerate_quiz(
     quiz.explanation = regenerated_quiz.get("explanation")
     quiz.source_sentence = regenerated_quiz.get("source_sentence")
     quiz.page_num = regenerated_quiz.get("page_num") or concept.page_num
-    quiz.status = "DRAFT"
+    quiz.status = "ACTIVE"
 
     quiz_repository.save_quiz(db, quiz)
 
@@ -1504,15 +1487,6 @@ def update_quiz(
         status_error = validate_quiz_status(normalized_status)
         if status_error:
             return status_error
-
-        if normalized_status == "READY":
-            ready_error = validate_ready_quiz(
-                quiz.question,
-                deserialize_options(quiz.options),
-                quiz.answer,
-            )
-            if ready_error:
-                return ready_error
 
         quiz.status = normalized_status
         updated_fields.append("status")
@@ -1618,15 +1592,6 @@ def create_manual_quiz(
     if validation_error:
         return validation_error
 
-    if quiz_status == "READY":
-        ready_error = validate_ready_quiz(
-            request_data.question,
-            request_data.options,
-            request_data.answer,
-        )
-        if ready_error:
-            return ready_error
-
     concept = None
     if request_data.concept_id is not None:
         concept = concept_repository.get_concept_by_id_and_lecture(
@@ -1711,15 +1676,6 @@ def update_quiz_status(
     status_error = validate_quiz_status(new_status)
     if status_error:
         return status_error
-
-    if new_status == "READY":
-        ready_error = validate_ready_quiz(
-            quiz.question,
-            deserialize_options(quiz.options),
-            quiz.answer,
-        )
-        if ready_error:
-            return ready_error
 
     previous_status = quiz.status
     quiz.status = new_status
