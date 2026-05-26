@@ -1,12 +1,12 @@
 from datetime import datetime
-from typing import List
+from typing import List, Union
 
 from pydantic import BaseModel, ConfigDict
 
 
 class AnswerItem(BaseModel):
     quiz_id: int
-    selected: str
+    selected: Union[str, int]
 
 
 class SubmissionCreate(BaseModel):
