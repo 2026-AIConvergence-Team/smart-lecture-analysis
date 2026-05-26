@@ -55,8 +55,8 @@ class Quiz(Base):
 
     page_num = Column(Integer, nullable=False, index=True)
 
-    # DRAFT | READY | DELETED
-    status = Column(String, default="DRAFT", nullable=False, index=True)
+    # ACTIVE | DELETED
+    status = Column(String, default="ACTIVE", nullable=False, index=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(

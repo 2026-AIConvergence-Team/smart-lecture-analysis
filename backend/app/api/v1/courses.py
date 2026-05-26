@@ -13,6 +13,26 @@ import app.schemas as schemas
 router = APIRouter(prefix="/api/courses", tags=["Courses"])
 
 
+def course_with_lectures_response(
+    course: models.Course,
+    lectures: list[models.Lecture],
+) -> dict:
+    return {
+        "id": course.id,
+        "user_id": course.user_id,
+        "title": course.title,
+        "department": course.department,
+        "year": course.year,
+        "semester": course.semester,
+        "schedule": course.schedule,
+        "student_count": course.student_count,
+        "section": course.section,
+        "created_at": course.created_at,
+        "updated_at": course.updated_at,
+        "lectures": lectures,
+    }
+
+
 def require_teacher(current_user: models.User) -> None:
     if current_user.role != "teacher":
         raise HTTPException(
@@ -39,6 +59,16 @@ def get_visible_course_or_404(
         require_teacher(current_user)
 
     if current_user.role == "teacher" and course.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Course not found.",
+        )
+
+    if current_user.role == "student" and not course_repository.student_has_joined_course(
+        db,
+        course.id,
+        current_user.id,
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Course not found.",
@@ -83,7 +113,7 @@ def create_course(
 
 @router.get(
     "",
-    response_model=List[schemas.CourseResponse],
+    response_model=List[schemas.CourseWithLecturesResponse],
     status_code=status.HTTP_200_OK,
     summary="List courses",
 )
@@ -93,7 +123,19 @@ def list_courses(
 ):
     if current_user.role == "teacher":
         return course_repository.get_courses_by_user(db, current_user.id)
-    return course_repository.get_courses(db)
+
+    courses = course_repository.get_courses_joined_by_student(db, current_user.id)
+    return [
+        course_with_lectures_response(
+            course,
+            lecture_repository.get_joined_lectures_by_course(
+                db,
+                course.id,
+                current_user.id,
+            ),
+        )
+        for course in courses
+    ]
 
 
 @router.patch(
@@ -169,4 +211,12 @@ def list_course_lectures(
     current_user: models.User = Depends(get_current_user),
 ):
     course = get_visible_course_or_404(db, course_id, current_user)
+
+    if current_user.role == "student":
+        return lecture_repository.get_joined_lectures_by_course(
+            db,
+            course.id,
+            current_user.id,
+        )
+
     return lecture_repository.get_lectures_by_course(db, course.id)
