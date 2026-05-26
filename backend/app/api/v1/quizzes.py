@@ -36,6 +36,7 @@ from app.services.quiz.ai_quiz_generation import (
     quiz_model_to_draft_dict,
 )
 from app.services.quiz.quiz_validation import (
+    canonicalize_quiz_type,
     error_response,
     normalize_difficulty,
     normalize_quiz_set_status,
@@ -61,6 +62,34 @@ SHARED_QUIZ_TAG = "Shared Quizzes"
 STUDENT_VISIBLE_QUIZ_SET_STATUSES = {"SENT", "CLOSED"}
 
 GROQ_AI_MAX_ENHANCE_ITEMS = 3
+
+
+def is_multiple_choice_quiz(quiz_type: str) -> bool:
+    return canonicalize_quiz_type(quiz_type) == "MULTIPLE_CHOICE"
+
+
+def parse_choice_number(selected: object, option_count: int) -> int | None:
+    selected_text = str(selected or "").strip()
+
+    if not selected_text.isdecimal():
+        return None
+
+    choice_number = int(selected_text)
+    if choice_number < 1 or choice_number > option_count:
+        return None
+
+    return choice_number
+
+
+def get_correct_choice_number(quiz: models.Quiz) -> int | None:
+    options = deserialize_options(quiz.options)
+    correct_answer = str(quiz.answer or "").strip()
+
+    for index, option in enumerate(options, start=1):
+        if str(option or "").strip() == correct_answer:
+            return index
+
+    return None
 
 
 def quiz_model_supports_generation_job_id() -> bool:
@@ -1055,7 +1084,7 @@ def submit_quiz_set_answers(
 
     answer_rows = []
     for answer in request_data.answers:
-        selected = answer.selected.strip()
+        selected = str(answer.selected).strip()
         if not selected:
             return error_response(
                 status.HTTP_400_BAD_REQUEST,
@@ -1063,7 +1092,30 @@ def submit_quiz_set_answers(
             )
 
         quiz = quiz_map[answer.quiz_id]
-        is_correct = selected == str(quiz.answer or "").strip()
+
+        if is_multiple_choice_quiz(quiz.quiz_type):
+            options = deserialize_options(quiz.options)
+            choice_number = parse_choice_number(selected, len(options))
+            if choice_number is None:
+                return error_response(
+                    status.HTTP_400_BAD_REQUEST,
+                    (
+                        "selected must be a 1-based option number for "
+                        f"multiple-choice quizzes. quiz_id={quiz.id}"
+                    ),
+                )
+
+            correct_choice_number = get_correct_choice_number(quiz)
+            if correct_choice_number is None:
+                return error_response(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    f"Quiz answer is not included in options. quiz_id={quiz.id}",
+                )
+
+            is_correct = choice_number == correct_choice_number
+        else:
+            is_correct = selected == str(quiz.answer or "").strip()
+
         answer_rows.append(
             {
                 "quiz_id": quiz.id,
