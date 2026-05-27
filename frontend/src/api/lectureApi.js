@@ -1,7 +1,14 @@
 const BASE = "";
 
+function getToken() {
+  const path = window.location.pathname;
+  if (path.startsWith("/teacher")) return localStorage.getItem("teacher_access_token") || localStorage.getItem("access_token");
+  if (path.startsWith("/student")) return localStorage.getItem("student_access_token") || localStorage.getItem("access_token");
+  return localStorage.getItem("access_token");
+}
+
 async function request(path, options = {}) {
-  const token = localStorage.getItem("access_token");
+  const token = getToken();
   const response = await fetch(`${BASE}${path}`, {
     headers: {
       "Content-Type": "application/json",
@@ -40,7 +47,7 @@ export function getLecture(lectureId) {
 // POST /api/lectures/{lecture_id}/pdf
 // FormData { file } → { id, file_name, pdf_url, total_pages, ... }
 export function uploadPdf(lectureId, file) {
-  const token = localStorage.getItem("access_token");
+  const token = getToken();
   const formData = new FormData();
   formData.append("file", file);
 

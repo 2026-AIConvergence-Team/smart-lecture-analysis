@@ -170,7 +170,7 @@ function TeacherLivePage() {
     getConcepts(lectureId)
       .then((res) => setConcepts(res.concepts || []))
       .catch(() => {});
-    getLectureQuizzes(lectureId, { status: "DRAFT" })
+    getLectureQuizzes(lectureId, { status: "ACTIVE" })
       .then((res) => {
         const list = res.quizzes || [];
         if (list.length > 0) {
@@ -578,7 +578,7 @@ function TeacherLivePage() {
       options: opts,
       answer: opts[manualForm.answerIdx] || opts[0],
       page: pdfPage,
-      status: "DRAFT",
+      status: "ACTIVE",
       ...(manualForm.setId && { set_id: Number(manualForm.setId) }),
       ...(manualForm.conceptId && { concept_id: Number(manualForm.conceptId) }),
       ...(manualForm.sourceSentence?.trim() && { source_sentence: manualForm.sourceSentence }),

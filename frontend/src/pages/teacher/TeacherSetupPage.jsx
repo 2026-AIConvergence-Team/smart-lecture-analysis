@@ -64,8 +64,16 @@ function TeacherSetupPage() {
 
     createLecture({ title, date, time, ...(courseId && { course_id: courseId }) })
       .then((data) => {
-        setLectureId(data.lecture_id ?? data.id);
-        if (data.class_code) setCode(data.class_code);  // 서버 발급 코드 사용
+        const id = data.lecture_id ?? data.id;
+        setLectureId(id);
+        if (data.class_code) {
+          setCode(data.class_code);  // 서버 발급 코드 사용
+        } else {
+          // 백엔드가 class_code=null로 생성하는 경우 자동으로 코드 발급
+          return generateClassCode(id).then((res) => {
+            if (res?.class_code) setCode(res.class_code);
+          });
+        }
       })
       .catch((err) => console.error("강의 생성 실패:", err));
   }, []);

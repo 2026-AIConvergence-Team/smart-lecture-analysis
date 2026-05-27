@@ -1,7 +1,14 @@
 const BASE = "";
 
+function getToken() {
+  const path = window.location.pathname;
+  if (path.startsWith("/teacher")) return localStorage.getItem("teacher_access_token") || localStorage.getItem("access_token");
+  if (path.startsWith("/student")) return localStorage.getItem("student_access_token") || localStorage.getItem("access_token");
+  return localStorage.getItem("access_token");
+}
+
 async function request(path, options = {}) {
-  const token = localStorage.getItem("access_token");
+  const token = getToken();
   const response = await fetch(`${BASE}${path}`, {
     headers: {
       "Content-Type": "application/json",
