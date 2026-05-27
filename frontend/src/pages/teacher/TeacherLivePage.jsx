@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Sparkles, Zap, AlertCircle, Send, CheckCircle2, Pencil, Trash2, Plus } from "lucide-react";
+import { Sparkles, Zap, AlertCircle, Send, CheckCircle2, Pencil, Trash2, Plus, RotateCcw } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import PdfViewer from "../../components/PdfViewer.jsx";
 import { keywordsFor, quizFromKeyword, botCounts, BOT_RESP, SAMPLE_QUESTIONS } from "../../data/quizSyncMock.js";
 import useBroadcastChannel from "../../hooks/useBroadcastChannel.js";
 import { appendQuestionCache, getQuestionsCache, setPdfCache, setQuizSets, setCourseInfo, getPdfCache } from "../../data/sessionCache.js";
-import { generateQuizzes, getQuizGenerateStatus, getConcepts, getLectureQuizzes, deleteQuiz, updateQuizSetStatus, createManualQuiz, updateQuiz, getQuizDetail } from "../../api/lectureApi.js";
+import { generateQuizzes, getQuizGenerateStatus, getConcepts, getLectureQuizzes, deleteQuiz, updateQuizStatus, createManualQuiz, updateQuiz, getQuizDetail, getLecture, updateLectureStatus, getQuizSets, updateQuizSetStatus, regenerateQuiz, getQuestions } from "../../api/lectureApi.js";
 
 const PALETTE = ["var(--brand)", "var(--warning)", "#94a3b8", "#cbd5e1"];
 
@@ -98,6 +98,7 @@ function TeacherLivePage() {
   const [rangeEnd, setRangeEnd] = useState(3);
   const [extractedKeywords, setExtractedKeywords] = useState([]);
   const [selectedKeywords, setSelectedKeywords] = useState([]);
+  const [keywordConceptMap, setKeywordConceptMap] = useState({}); // keyword → concept_id
   const [quizDraft, setQuizDraft] = useState(currentQuizSet);
   const [concepts, setConcepts] = useState([]);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
@@ -137,24 +138,47 @@ function TeacherLivePage() {
     setCourseInfo({ code, courseName, week });
   }, [code, courseName, week]);
 
-  // 마운트 시: 개념 목록 + 기존 DRAFT 퀴즈 로드 (1회만 실행)
+  // 마운트 시: 강의 정보 조회 + 개념 목록 + 기존 DRAFT 퀴즈 로드 (1회만 실행)
   useEffect(() => {
     if (!lectureId || dataLoadedRef.current) return;
     dataLoadedRef.current = true;
+    // 강의 정보 조회 (강의 상태·코드 최신화)
+    getLecture(lectureId).catch(() => {});
+    // 세트 목록 조회 → 기존 백엔드 세트 복원 (setId 포함)
+    getQuizSets(lectureId)
+      .then((res) => {
+        const backendSets = res.sets || [];
+        if (backendSets.length === 0) return;
+        setSets((prev) => {
+          if (prev.length > 0) return prev;  // 이미 로컬 세트 있으면 덮지 않음
+          return backendSets.map((s) => ({
+            id: s.set_id,
+            setId: s.set_id,
+            idx: s.set_number,
+            status: s.status === "ACTIVE" ? "active" : s.status === "CLOSED" ? "closed" : "draft",
+            createdAt: new Date(s.created_at).toLocaleTimeString("ko-KR"),
+            startPage: s.page_start,
+            pdfRange: s.page_start === s.page_end
+              ? `p.${s.page_start}`
+              : `p.${s.page_start}-${s.page_end}`,
+            questions: [],
+            counts: {},
+          }));
+        });
+      })
+      .catch(() => {});
     getConcepts(lectureId)
       .then((res) => setConcepts(res.concepts || []))
       .catch(() => {});
-    getLectureQuizzes(lectureId)
+    getLectureQuizzes(lectureId, { status: "ACTIVE" })
       .then((res) => {
-        const draftSets = (res.sets || []).filter((set) => set.status === "DRAFT");
-        const draftSet = draftSets[draftSets.length - 1];
-        const list = draftSet?.quizzes || res.quizzes || [];
+        const list = res.quizzes || [];
         if (list.length > 0) {
           setQuizDraft((prev) =>
             prev.length === 0
               ? list.map((q, i) => ({
                   id: q.quiz_id,
-                  setId: q.set_id || draftSet?.set_id,
+                  setId: q.set_id,
                   n: i + 1,
                   keyword: q.concept || "개념",
                   type: q.quiz_type === "OX" ? "OX" : q.quiz_type === "BLANK" ? "빈칸형" : "객관식",
@@ -168,7 +192,26 @@ function TeacherLivePage() {
         }
       })
       .catch(() => {});
-  }, [lectureId]);
+    // 기존 익명 질문 목록 로드 (수업 중 새 질문은 STUDENT_QUESTION 브로드캐스트로 추가됨)
+    getQuestions(lectureId)
+      .then((res) => {
+        const list = Array.isArray(res) ? res : [];
+        if (list.length === 0) return;
+        setQuestions((prev) => {
+          const existingIds = new Set(prev.map((q) => q.id));
+          const incoming = list
+            .filter((q) => !existingIds.has(q.id))
+            .map((q) => ({
+              id: q.id,
+              text: q.content,
+              week,
+              time: new Date(q.created_at).toLocaleTimeString("ko-KR"),
+            }));
+          return incoming.length > 0 ? [...incoming, ...prev] : prev;
+        });
+      })
+      .catch(() => {});
+  }, [lectureId, week]);
 
   // Keep refs current so handleMessage can read latest state
   useEffect(() => { pdfDataRef.current = pdfData; }, [pdfData]);
@@ -283,7 +326,82 @@ function TeacherLivePage() {
       (c) => !c.page_num || (c.page_num >= rangeStart && c.page_num <= rangeEnd)
     );
     const list = filtered.length > 0 ? filtered : concepts;
-    setExtractedKeywords(list.map((c) => c.concept_name));
+
+    // keywords 배열(짧은 핵심어) 우선 사용, 없으면 짧은 concept_name fallback
+    const map = {};
+    const seen = new Set();
+    const kwList = [];
+
+    const BAD_ENDINGS = [
+      "으며", "이며", "하며", "되며", "고서", "어서", "하여", "되어",
+      "있으며", "이고", "하고", "되고", "으로", "에서", "부터", "까지",
+      "에게", "보다", "있음", "없음", "이란", "하는", "되는", "이다",
+      "한다", "된다", "하다", "지다", "수있음", "ㄹ수있음", "처지", "쳐지",
+    ];
+    const BAD_STARTS = ["을", "를", "의", "에", "와", "과", "도", "만", "어떤", "이런", "그런", "저런"];
+    // compact 안에 포함되면 노이즈로 간주
+    const NOISE_CONTAINS = ["어떤", "화학물질"];
+
+    const addKw = (kw, conceptId) => {
+      let t = kw.trim();
+      if (!t) return;
+
+      // 영문 혼합("옥신 auxin") → 한국어 부분만 추출
+      const koreanOnly = t.replace(/\s+[A-Za-z][A-Za-z\s]*$/, "").trim();
+      if (koreanOnly && koreanOnly !== t) t = koreanOnly;
+
+      // 영문만 있는 키워드 제외 (단, 2자 이하 약어는 허용)
+      if (/^[A-Za-z\s]+$/.test(t) && t.replace(/\s/g, "").length > 2) return;
+
+      const compact = t.replace(/\s+/g, "");
+
+      // 최소 2자
+      if (compact.length < 2) return;
+      // 공백 제거 기준 8자 초과는 문장형으로 간주
+      if (compact.length > 8) return;
+      // 문장형 어미로 끝나는 것 제외
+      if (BAD_ENDINGS.some((e) => compact.endsWith(e))) return;
+      // 조사로 시작하는 것 제외
+      if (BAD_STARTS.some((s) => compact.startsWith(s))) return;
+      // 노이즈 단어가 포함된 것 제외
+      if (NOISE_CONTAINS.some((s) => compact.includes(s))) return;
+
+      // 이미 동일한 compact가 등록됐으면 skip (중복 방지)
+      const compactKey = compact.toLowerCase();
+      if (seen.has(compactKey)) return;
+      seen.add(compactKey);
+      map[t] = conceptId;
+      kwList.push(t);
+    };
+
+    // 1) 각 concept의 keywords 배열에서 핵심어 수집
+    list.forEach((c) => {
+      const kws = Array.isArray(c.keywords) ? c.keywords : [];
+      kws.forEach((kw) => addKw(kw, c.concept_id));
+    });
+
+    // 2) keywords가 없거나 너무 적으면 짧은 concept_name도 추가
+    if (kwList.length < list.length) {
+      list.forEach((c) => {
+        if (c.concept_name) addKw(c.concept_name, c.concept_id);
+      });
+    }
+
+    // 3) 그래도 없으면 길이 제한 없이 concept_name 그대로 (최후 수단)
+    if (kwList.length === 0) {
+      list.forEach((c) => {
+        const t = c.concept_name?.trim();
+        if (!t) return;
+        const compactKey = t.replace(/\s+/g, "").toLowerCase();
+        if (seen.has(compactKey)) return;
+        seen.add(compactKey);
+        map[t] = c.concept_id;
+        kwList.push(t);
+      });
+    }
+
+    setKeywordConceptMap(map);
+    setExtractedKeywords(kwList);
     setSelectedKeywords([]);
   };
 
@@ -308,7 +426,7 @@ function TeacherLivePage() {
     }
 
     const conceptIds = selectedKeywords
-      .map((kw) => concepts.find((c) => c.concept_name === kw)?.concept_id)
+      .map((kw) => keywordConceptMap[kw] ?? concepts.find((c) => c.concept_name === kw)?.concept_id)
       .filter(Boolean);
 
     setLoadingQuiz(true);
@@ -323,7 +441,7 @@ function TeacherLivePage() {
         const list = res.quizzes || [];
         const converted = list.map((q, i) => ({
           id: q.quiz_id,
-          setId: q.set_id || res.set_id,
+          setId: q.set_id,
           n: i + 1,
           keyword: q.concept || concepts.find((c) => c.concept_id === q.concept_id)?.concept_name || "개념",
           type: q.quiz_type === "OX" ? "OX" : q.quiz_type === "BLANK" ? "빈칸형" : "객관식",
@@ -349,11 +467,35 @@ function TeacherLivePage() {
 
   // ── 드래프트에서 개별 퀴즈 삭제 (deleteQuiz) ───────────
   const handleDeleteQuizFromDraft = (quizId) => {
-    const targetQuiz = quizDraft.find((q) => q.id === quizId);
     if (lectureId) {
-      deleteQuiz(quizId, targetQuiz?.setId).catch((err) => console.error("퀴즈 삭제 실패:", err.message));
+      const target = quizDraft.find((q) => q.id === quizId);
+      deleteQuiz(target?.setId, quizId).catch((err) => console.error("퀴즈 삭제 실패:", err.message));
     }
     setQuizDraft((prev) => prev.filter((q) => q.id !== quizId));
+  };
+
+  // ── 퀴즈 재생성 (regenerateQuiz) ───────────────────────
+  const handleRegenerateQuiz = (quiz) => {
+    if (!quiz.setId || !lectureId) return;
+    regenerateQuiz(quiz.setId, quiz.id, { use_ai: true, difficulty: "MEDIUM" })
+      .then((data) => {
+        setQuizDraft((prev) =>
+          prev.map((q) =>
+            q.id === quiz.id
+              ? {
+                  ...q,
+                  question: data.question ?? q.question,
+                  choices: Array.isArray(data.options) ? data.options : q.choices,
+                  answer: Array.isArray(data.options)
+                    ? Math.max(0, data.options.indexOf(data.answer))
+                    : q.answer,
+                  explain: data.explanation ?? q.explain,
+                }
+              : q
+          )
+        );
+      })
+      .catch((err) => console.error("퀴즈 재생성 실패:", err.message));
   };
 
   // ── 퀴즈 수정 폼 열기 (getQuizDetail → editForm 세팅) ──
@@ -371,7 +513,7 @@ function TeacherLivePage() {
         .then((data) =>
           setEditForm({
             quizId: data.quiz_id,
-            setId: data.set_id || quiz.setId,
+            setId: data.set_id,
             question: data.question,
             options: Array.isArray(data.options) ? [...data.options] : [],
             answer: data.answer ?? "",
@@ -409,7 +551,7 @@ function TeacherLivePage() {
     });
 
     if (lectureId) {
-      updateQuiz(editForm.quizId, payload, editForm.setId)
+      updateQuiz(editForm.setId, editForm.quizId, payload)
         .then((data) => {
           setQuizDraft((prev) =>
             prev.map((q) => (q.id === editForm.quizId ? applyLocal(q, data) : q))
@@ -435,10 +577,11 @@ function TeacherLivePage() {
       question: manualForm.question,
       options: opts,
       answer: opts[manualForm.answerIdx] || opts[0],
-      page: pdfPage,       // 현재 보고 있는 PDF 페이지 (필수 필드)
+      page: pdfPage,
       status: "ACTIVE",
-      ...(quizDraft[0]?.setId && { set_id: quizDraft[0].setId }),
+      ...(manualForm.setId && { set_id: Number(manualForm.setId) }),
       ...(manualForm.conceptId && { concept_id: Number(manualForm.conceptId) }),
+      ...(manualForm.sourceSentence?.trim() && { source_sentence: manualForm.sourceSentence }),
       ...(manualForm.explanation?.trim() && { explanation: manualForm.explanation }),
     })
       .then((data) => {
@@ -463,20 +606,21 @@ function TeacherLivePage() {
 
   const handlePublishQuiz = () => {
     if (!quizDraft.length) return;
-    const backendSetId = quizDraft.find((q) => q.setId)?.setId;
-    if (lectureId && backendSetId) {
-      updateQuizSetStatus(backendSetId, "SENT").catch((err) =>
-        console.error("세트 상태 변경 실패:", err.message)
+    // 배포 시 모든 퀴즈 상태를 READY로 변경 (updateQuizStatus)
+    if (lectureId) {
+      quizDraft.forEach((q) =>
+        updateQuizStatus(q.setId, q.id, "READY").catch((err) =>
+          console.error("상태 변경 실패:", err.message)
+        )
       );
     }
-    const id = backendSetId || Date.now();
+    const id = Date.now();
     const initialCounts = {};
     quizDraft.forEach((q) => {
       initialCounts[q.id] = botCounts(q.keyword);
     });
     const newSet = {
       id,
-      backendSetId,
       idx: sets.length + 1,
       status: "active",
       createdAt: new Date().toLocaleTimeString("ko-KR"),
@@ -494,22 +638,44 @@ function TeacherLivePage() {
       startPage: rangeStart,
       pdfRange: rangeStart === rangeEnd ? `p.${rangeStart}` : `p.${rangeStart}-${rangeEnd}`,
     });
+    // 배포 후 백엔드 세트 목록 재조회 → 로컬 세트에 setId 주입 + 학생에게 백엔드 setId 전달
+    if (lectureId) {
+      getQuizSets(lectureId)
+        .then((res) => {
+          const list = res.sets || [];
+          if (list.length === 0) return;
+          const latest = [...list].sort((a, b) => b.set_id - a.set_id)[0];
+          setSets((prev) =>
+            prev.map((s) =>
+              s.id === id && !s.setId ? { ...s, setId: latest.set_id } : s
+            )
+          );
+          // 학생 화면에서 답안 제출 시 실제 백엔드 set_id가 필요하므로 별도 브로드캐스트
+          emit("QUIZ_SET_BACKEND_ID", { localSetId: id, backendSetId: latest.set_id });
+        })
+        .catch(() => {});
+    }
   };
 
   const handleCloseSet = (setId) => {
     setSets((prev) => prev.map((s) => (s.id === setId ? { ...s, status: "closed" } : s)));
-    const backendSetId = sets.find((s) => s.id === setId)?.backendSetId;
-    if (lectureId && backendSetId) {
-      updateQuizSetStatus(backendSetId, "CLOSED").catch((err) =>
-        console.error("세트 종료 실패:", err.message)
-      );
-    }
     if (activeSetId === setId) setActiveSetId(null);
     emit("QUIZ_CLOSED", { setId });
+    // 백엔드 세트 상태 CLOSED로 변경 (setId가 있을 때만)
+    if (lectureId) {
+      const set = setsRef.current.find((s) => s.id === setId);
+      if (set?.setId) {
+        updateQuizSetStatus(set.setId, "CLOSED").catch(() => {});
+      }
+    }
   };
 
   const handleConfirmEnd = () => {
     emit("CLASS_ENDED", {});
+    // 강의 상태를 "ended"로 변경 (실패해도 리포트로 이동)
+    if (lectureId) {
+      updateLectureStatus(lectureId, "ended").catch(() => {});
+    }
     navigate("/teacher/report");
   };
 
@@ -717,7 +883,16 @@ function TeacherLivePage() {
                           style={{ marginTop: 8, width: "100%" }}
                           disabled={!lectureId}
                           onClick={() =>
-                            setManualForm({ question: "", options: ["", "", "", ""], answerIdx: 0, quizType: "BLANK", conceptId: "", explanation: "" })
+                            setManualForm({
+              question: "",
+              options: ["", "", "", ""],
+              answerIdx: 0,
+              quizType: "BLANK",
+              conceptId: "",
+              explanation: "",
+              sourceSentence: "",
+              setId: sets.filter((s) => s.setId).at(-1)?.setId ?? "",
+            })
                           }
                         >
                           <Plus size={14} /> 수동 퀴즈 추가
@@ -794,6 +969,30 @@ function TeacherLivePage() {
                             <p style={{ fontSize: 11, color: "var(--zinc-500)", margin: "4px 0 8px" }}>
                               라디오 버튼으로 정답 보기를 선택하세요
                             </p>
+
+                            {/* 세트 선택 */}
+                            <select
+                              className="input"
+                              value={manualForm.setId}
+                              onChange={(e) => setManualForm((f) => ({ ...f, setId: e.target.value }))}
+                              style={{ marginBottom: 8, width: "100%" }}
+                            >
+                              <option value="">세트 선택 (선택사항)</option>
+                              {sets.filter((s) => s.setId).map((s) => (
+                                <option key={s.setId} value={s.setId}>
+                                  세트 #{s.idx} ({s.pdfRange})
+                                </option>
+                              ))}
+                            </select>
+
+                            {/* 출처 문장 */}
+                            <input
+                              className="input"
+                              placeholder="출처 문장 (선택사항)"
+                              value={manualForm.sourceSentence}
+                              onChange={(e) => setManualForm((f) => ({ ...f, sourceSentence: e.target.value }))}
+                              style={{ marginBottom: 8, width: "100%" }}
+                            />
 
                             {/* 해설 */}
                             <input
@@ -903,7 +1102,7 @@ function TeacherLivePage() {
                             폐기
                           </button>
                         </div>
-                        <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+                        <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10, maxHeight: 380, overflowY: "auto" }}>
                           {quizDraft.map((q) => (
                             <div key={q.id} className="quiz-item">
                               <div className="quiz-item-head">
@@ -915,6 +1114,16 @@ function TeacherLivePage() {
                                   <span className="pill pill-neutral" style={{ fontSize: 10 }}>
                                     {q.type}
                                   </span>
+                                  <button
+                                    className="btn btn-ghost btn-sm"
+                                    type="button"
+                                    style={{ padding: "0 6px", height: 24 }}
+                                    title="퀴즈 재생성"
+                                    disabled={!q.setId || !lectureId}
+                                    onClick={() => handleRegenerateQuiz(q)}
+                                  >
+                                    <RotateCcw size={12} />
+                                  </button>
                                   <button
                                     className="btn btn-ghost btn-sm"
                                     type="button"
