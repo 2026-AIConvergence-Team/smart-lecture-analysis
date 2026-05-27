@@ -37,6 +37,8 @@ function Topbar({ role = "teacher" }) {
       // 토큰 만료 등 실패해도 로그아웃 처리
     } finally {
       localStorage.removeItem("access_token");
+      localStorage.removeItem("teacher_access_token");
+      localStorage.removeItem("student_access_token");
       localStorage.removeItem("user_role");
       localStorage.removeItem("user_name");
       localStorage.removeItem("user_email");

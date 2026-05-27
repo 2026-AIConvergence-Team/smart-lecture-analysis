@@ -2,9 +2,9 @@ import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { CloudUpload, ChevronLeft, Play, Trash2 } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
-import { keywordsFor } from "../../data/quizSyncMock.js";
+import { keywordsFor, quizFromKeyword, SAMPLE_QUESTIONS } from "../../data/quizSyncMock.js";
 import { setPdfCache, clearSession } from "../../data/sessionCache.js";
-import { createLecture, uploadPdf, analyzePdf, generateQuizzes, getQuizGenerateStatus } from "../../api/lectureApi.js";
+import { createLecture, uploadPdf, analyzePdf, getConcepts, generateQuizzes, getQuizGenerateStatus, generateClassCode, updateLectureStatus } from "../../api/lectureApi.js";
 
 const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -29,8 +29,9 @@ function estimatePdfPages(data) {
 function TeacherSetupPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const courseId   = location.state?.courseId   || null;
   const courseName = location.state?.courseName || "자료구조론";
-  const week = location.state?.week || 5;
+  const week       = location.state?.week       || 5;
   const courseMeta = location.state?.courseMeta || "2025-1 / 월,수,금";
 
   // 상태 관리
@@ -61,21 +62,33 @@ function TeacherSetupPage() {
     const time = today.toTimeString().slice(0, 5);            // "10:30"
     const title = `${courseName} ${week}주차`;
 
-    createLecture({ title, date, time })
-      .then((data) => setLectureId(data.lecture_id ?? data.id))  // 백엔드가 id 또는 lecture_id로 반환
+    createLecture({ title, date, time, ...(courseId && { course_id: courseId }) })
+      .then((data) => {
+        const id = data.lecture_id ?? data.id;
+        setLectureId(id);
+        if (data.class_code) {
+          setCode(data.class_code);  // 서버 발급 코드 사용
+        } else {
+          // 백엔드가 class_code=null로 생성하는 경우 자동으로 코드 발급
+          return generateClassCode(id).then((res) => {
+            if (res?.class_code) setCode(res.class_code);
+          });
+        }
+      })
       .catch((err) => console.error("강의 생성 실패:", err));
   }, []);
 
   // lectureId와 pdfFile 둘 다 준비되면:
-  // PDF 업로드 → PDF 분석(텍스트 추출 + 개념 추출)
+  // PDF 업로드 → 텍스트 추출 → 개념 추출 → 개념 목록 조회 (순서대로, 모두 동기)
   useEffect(() => {
     if (!lectureId || !pdfFile) return;
 
     uploadPdf(lectureId, pdfFile)
       .then((data) => {
         if (data?.total_pages) setPdfTotal(data.total_pages);
-        return analyzePdf(lectureId);
+        return analyzePdf(lectureId);                // 텍스트 추출 + 개념 추출 (통합, 동기)
       })
+      .then(() => getConcepts(lectureId))            // 개념 목록 조회
       .then((res) => {
         const list = res.concepts || [];
         setConcepts(list);
@@ -189,6 +202,10 @@ function TeacherSetupPage() {
 
   const handleStartClass = () => {
     if (!pdfFileName) return;
+    // 강의 상태를 "active"로 변경 (실패해도 진행)
+    if (lectureId) {
+      updateLectureStatus(lectureId, "active").catch(() => {});
+    }
     navigate("/teacher/live", {
       state: {
         code,
@@ -252,7 +269,15 @@ function TeacherSetupPage() {
               <div className="class-code-big mono" style={{ fontSize: "84px", marginTop: "14px", fontWeight: "700" }}>{code}</div>
               <div className="class-code-actions" style={{ marginTop: "22px" }}>
                 <button className="btn btn-ghost btn-sm" type="button" onClick={() => navigator.clipboard.writeText(code)}>복사</button>
-                <button className="btn btn-ghost btn-sm" type="button" onClick={() => setCode(genCode())}>코드 재생성</button>
+                <button className="btn btn-ghost btn-sm" type="button" onClick={() => {
+                  if (lectureId) {
+                    generateClassCode(lectureId)
+                      .then((res) => { if (res?.class_code) setCode(res.class_code); })
+                      .catch(() => setCode(genCode()));
+                  } else {
+                    setCode(genCode());
+                  }
+                }}>코드 재생성</button>
                 <button className="btn btn-ghost btn-sm" type="button">QR 보기</button>
               </div>
               <div className="join-counter" style={{ marginTop: "18px" }}>
