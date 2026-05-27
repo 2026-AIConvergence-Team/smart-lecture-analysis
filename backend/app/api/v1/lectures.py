@@ -223,39 +223,43 @@ def concept_to_response(concept: models.Concept) -> dict:
         "page_num": concept.page_num,
         "keywords": concept.keywords.split(",") if concept.keywords else [],
         "sentences": json.loads(concept.sentences) if concept.sentences else [],
+        "image_paths": json.loads(concept.image_paths) if concept.image_paths else [],
+        "image_descriptions": json.loads(concept.image_descriptions)
+        if concept.image_descriptions
+        else [],
     }
 
 
 # 1. POST /api/lectures
 @router.post(
-    "", 
-    response_model=schemas.LectureResponse, 
+    "",
+    response_model=schemas.LectureResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create lecture session",
     tags=[TEACHER_LECTURE_TAG],
 )
 def create_lecture(
-    request_data: schemas.LectureCreate, 
+    request_data: schemas.LectureCreate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_user),
 ):
     if not request_data.title or not request_data.title.strip():
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "title is required."}
+            content={"error": "title is required."},
         )
 
     if current_user.role != "teacher":
         return JSONResponse(
             status_code=status.HTTP_403_FORBIDDEN,
-            content={"error": "Only teachers can create lectures."}
+            content={"error": "Only teachers can create lectures."},
         )
 
     course = course_repository.get_course_by_id(db, request_data.course_id)
     if not course or course.user_id != current_user.id:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "Course not found."}
+            content={"error": "Course not found."},
         )
 
     new_lecture = models.Lecture(
@@ -267,7 +271,7 @@ def create_lecture(
         status="ACTIVE",
         extract_status="pending",
         analyze_status="pending",
-        total_pages=0
+        total_pages=0,
     )
 
     try:
@@ -277,7 +281,7 @@ def create_lecture(
         lecture_repository.rollback(db)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": f"Database error: {str(e)}"}
+            content={"error": f"Database error: {str(e)}"},
         )
 
 
@@ -419,7 +423,7 @@ def list_lecture_questions(
         for question, author in question_rows
     ]
 
-    
+
 # 2. POST /api/lectures/{lecture_id}/pdf
 @router.post(
     "/{lecture_id}/pdf",
@@ -432,16 +436,16 @@ async def upload_lecture_pdf(
     lecture_id: int,
     file: UploadFile = File(..., description="PDF file to upload"),
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_user),
 ):
     lecture, error_response = get_visible_lecture(db, lecture_id, current_user)
     if error_response:
         return error_response
 
-    if not file.filename.lower().endswith('.pdf'):
+    if not file.filename.lower().endswith(".pdf"):
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "Only PDF files can be uploaded."}
+            content={"error": "Only PDF files can be uploaded."},
         )
 
     try:
@@ -460,7 +464,7 @@ async def upload_lecture_pdf(
         lecture.file_name = file.filename
         lecture.pdf_url = f"/files/lectures/{lecture_id}/{file.filename}"
         lecture.total_pages = total_pages
-        
+
         lecture_repository.save_lecture(db, lecture)
 
         return lecture
@@ -468,10 +472,10 @@ async def upload_lecture_pdf(
         lecture_repository.rollback(db)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": f"Failed to process PDF file: {str(e)}"}
+            content={"error": f"Failed to process PDF file: {str(e)}"},
         )
 
-    
+
 # 3. POST /api/lectures/{lecture_id}/pdf/analyze
 @router.post(
     "/{lecture_id}/pdf/analyze",
@@ -482,7 +486,7 @@ async def upload_lecture_pdf(
 def analyze_lecture_pdf(
     lecture_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_user),
 ):
     lecture, error_response = get_teacher_owned_lecture(db, lecture_id, current_user)
     if error_response:
@@ -491,14 +495,14 @@ def analyze_lecture_pdf(
     if not lecture.file_name:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "PDF file is required before analysis."}
+            content={"error": "PDF file is required before analysis."},
         )
 
     file_path = f"uploads/lectures/{lecture_id}/{lecture.file_name}"
     if not os.path.exists(file_path):
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "Stored PDF file was not found."}
+            content={"error": "Stored PDF file was not found."},
         )
 
     try:
@@ -516,7 +520,7 @@ def analyze_lecture_pdf(
         if not page_contents:
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                content={"error": "No extracted page text exists."}
+                content={"error": "No extracted page text exists."},
             )
 
         concept_message = analyze_page_contents_to_concepts(
@@ -541,15 +545,15 @@ def analyze_lecture_pdf(
                 },
                 "concept_count": len(concepts),
                 "concepts": [concept_to_response(concept) for concept in concepts],
-            }
+            },
         )
     except Exception as e:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": f"Failed to analyze PDF: {str(e)}"}
+            content={"error": f"Failed to analyze PDF: {str(e)}"},
         )
-    
-    
+
+
 # 4. GET /api/lectures/{lecture_id}
 @router.get(
     "/{lecture_id}",
@@ -561,7 +565,7 @@ def analyze_lecture_pdf(
 def get_lecture_status(
     lecture_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_user),
 ):
     lecture, error_response = get_accessible_lecture(db, lecture_id, current_user)
     if error_response:
@@ -580,7 +584,7 @@ def update_lecture_status(
     lecture_id: int,
     request_data: schemas.LectureStatusUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_user),
 ):
     lecture, error_response = get_teacher_owned_lecture(db, lecture_id, current_user)
     if error_response:
@@ -590,7 +594,7 @@ def update_lecture_status(
     if normalized_status not in {"ACTIVE", "ENDED"}:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "status must be ACTIVE or ENDED."}
+            content={"error": "status must be ACTIVE or ENDED."},
         )
 
     lecture.status = normalized_status
@@ -608,7 +612,7 @@ def update_lecture_status(
 def get_lecture_concepts(
     lecture_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_user),
 ):
     lecture, error_response = get_teacher_owned_lecture(db, lecture_id, current_user)
     if error_response:
@@ -621,5 +625,5 @@ def get_lecture_concepts(
         content={
             "lecture_id": lecture_id,
             "concepts": [concept_to_response(concept) for concept in concepts],
-        }
+        },
     )
