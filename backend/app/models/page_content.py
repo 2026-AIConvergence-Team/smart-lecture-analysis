@@ -11,3 +11,7 @@ class PageContent(Base):
     lecture_id = Column(Integer, ForeignKey("lectures.id", ondelete="CASCADE"), nullable=False)
     page_num = Column(Integer, nullable=False)  # 1부터 시작하는 페이지 번호
     text_content = Column(Text, nullable=False)
+    # 페이지에서 추출한 이미지 경로 리스트 (JSON 문자열로 저장)
+    # 예: '["uploads/lectures/1/images/page_3_img_1.png", ...]'
+    # 이미지가 없는 페이지는 null
+    image_paths = Column(Text, nullable=True)
