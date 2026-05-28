@@ -50,6 +50,18 @@ from app.schemas.anonymous_question import (
     AnonymousQuestionCreate,
     AnonymousQuestionResponse,
 )
+from app.schemas.report import (
+    TeacherReportResponse,
+    TeacherReportStats,
+    ConceptStat,
+    TeacherQuiz,
+    TeacherSet,
+    AnonymousQuestion,
+    StudentReviewResponse,
+    StudentStats,
+    StudentQuiz,
+    StudentSet,
+)
 
 __all__ = [
     "UserRole",
@@ -99,4 +111,14 @@ __all__ = [
     "MemoResponse",
     "AnonymousQuestionCreate",
     "AnonymousQuestionResponse",
+    "TeacherReportResponse",
+    "TeacherReportStats",
+    "ConceptStat",
+    "TeacherQuiz",
+    "TeacherSet",
+    "AnonymousQuestion",
+    "StudentReviewResponse",
+    "StudentStats",
+    "StudentQuiz",
+    "StudentSet",
 ]
