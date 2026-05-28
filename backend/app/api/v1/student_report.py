@@ -1,4 +1,4 @@
-from fastapi import APIRouter, status, Depends, Query
+from fastapi import APIRouter, status, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 import json
@@ -23,15 +23,21 @@ def error_response(status_code: int, message: str):
     return JSONResponse(status_code=status_code, content={"error": message})
 
 
+def format_date(date_obj):
+    """날짜를 'YYYY.MM.DD' 형식으로 포맷"""
+    if not date_obj:
+        return ""
+    return date_obj.strftime("%Y.%m.%d")
+
+
 @router.get(
-    "/{lecture_id}/report/student",
+    "/{lecture_id}/review",
     response_model=schemas.StudentReviewResponse,
     status_code=status.HTTP_200_OK,
     summary="Get student review report",
 )
-def get_student_report(
+def get_student_review(
     lecture_id: int,
-    filter: str = Query("all", regex="^(all|wrong|hot)$"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -39,7 +45,7 @@ def get_student_report(
     if current_user.role != "student":
         return error_response(
             status.HTTP_403_FORBIDDEN,
-            "Only students can access student review report.",
+            "Only students can access this review.",
         )
 
     # 강의 존재 확인
@@ -47,14 +53,14 @@ def get_student_report(
     if not lecture:
         return error_response(
             status.HTTP_404_NOT_FOUND,
-            "Lecture not found.",
+            "LECTURE_NOT_FOUND",
         )
 
-    # 강의 상태 확인 (ENDED일 때만 리포트 조회 가능)
+    # 강의 상태 확인 (ENDED가 아니면 403 반환)
     if lecture.status != "ENDED":
         return error_response(
             status.HTTP_403_FORBIDDEN,
-            "Report is only available after the lecture ends.",
+            "LECTURE_NOT_ENDED",
         )
 
     # 1. 세트 목록 조회
@@ -62,26 +68,32 @@ def get_student_report(
     if not quiz_sets:
         return schemas.StudentReviewResponse(
             lecture_id=lecture_id,
-            my_scores=[],
-            quiz_reviews=[],
+            week=0,  # TODO: 강의 주차 정보 계산 또는 모델에서 가져오기
+            date=format_date(lecture.date),
+            my_stats=schemas.StudentStats(
+                total_quiz_count=0,
+                my_correct_count=0,
+                my_correct_rate=0.0,
+            ),
+            sets=[],
         )
 
-    # 2. 내 메모 조회 (모두 한 번에 로드)
+    # 2. 내 메모 조회
     my_memos = memo_repository.get_memos_by_student_and_lecture(
         db, current_user.id, lecture_id
     )
     memo_map = {m.quiz_id: m.content for m in my_memos}
 
-    # 3. 세트별 결과 계산
-    my_scores = []
-    quiz_reviews = []
+    # 3. 전체 퀴즈 통계 및 세트별 결과 계산
+    total_quiz_count = 0
+    total_correct_count = 0
+    sets_data = []
 
     for quiz_set in quiz_sets:
-        # 세트별 퀴즈 조회
+        # 세트별 퀴즈 조회 (DELETED 제외한 모든 퀴즈)
         quizzes = quiz_repository.get_lecture_quizzes(
             db=db,
             lecture_id=lecture_id,
-            quiz_status="READY",
             set_id=quiz_set.id,
         )
 
@@ -95,7 +107,7 @@ def get_student_report(
 
         # 내 답안 조회
         my_answers = {}
-        my_correct_count = 0
+        my_set_correct_count = 0
         if my_submission:
             answers = submission_answer_repository.get_answers_by_submission(
                 db, my_submission.id
@@ -106,56 +118,29 @@ def get_student_report(
                     "is_correct": answer.is_correct,
                 }
                 if answer.is_correct:
-                    my_correct_count += 1
+                    my_set_correct_count += 1
 
         # 세트별 내 성적
-        total_quiz_count = len(quizzes)
-        my_correct_rate = (
-            (my_correct_count / total_quiz_count * 100)
-            if total_quiz_count > 0
+        set_quiz_count = len(quizzes)
+        total_quiz_count += set_quiz_count
+        total_correct_count += my_set_correct_count
+
+        my_set_correct_rate = (
+            (my_set_correct_count / set_quiz_count * 100)
+            if set_quiz_count > 0
             else 0.0
-        )
-
-        # 세트별 전체 평균 정답률 계산
-        set_correct_total = 0
-        set_answer_total = 0
-        for quiz in quizzes:
-            all_answers = submission_answer_repository.get_answers_by_quiz(
-                db, quiz.id
-            )
-            correct_count = sum(1 for a in all_answers if a.is_correct)
-            set_correct_total += correct_count
-            set_answer_total += len(all_answers)
-
-        class_avg_rate = (
-            (set_correct_total / set_answer_total * 100)
-            if set_answer_total > 0
-            else 0.0
-        )
-
-        my_scores.append(
-            schemas.MySetScore(
-                set_id=quiz_set.id,
-                set_number=quiz_set.set_number,
-                correct_count=my_correct_count,
-                total_count=total_quiz_count,
-                correct_rate=my_correct_rate,
-                class_avg_rate=class_avg_rate,
-            )
         )
 
         # 4. 퀴즈별 복습 정보
         set_quizzes = []
         for quiz in quizzes:
-            # 모든 답안 조회 (오답률 계산)
+            # 모든 답안 조회 (전체 학생 오답률 계산)
             all_answers = submission_answer_repository.get_answers_by_quiz(
                 db, quiz.id
             )
             wrong_count = sum(1 for a in all_answers if not a.is_correct)
-            wrong_rate = (
-                (wrong_count / len(all_answers) * 100)
-                if all_answers
-                else 0.0
+            class_wrong_rate = (
+                (wrong_count / len(all_answers) * 100) if all_answers else 0.0
             )
 
             # 내 답안
@@ -171,41 +156,48 @@ def get_student_report(
                 except:
                     options = []
 
-            quiz_review = schemas.QuizReview(
-                quiz_id=quiz.id,
-                question=quiz.question,
-                options=options,
-                answer=quiz.answer,
-                explanation=quiz.explanation,
-                my_answer=my_selected,
-                is_correct=is_correct,
-                wrong_rate=wrong_rate,
-                memo=memo_map.get(quiz.id),
+            set_quizzes.append(
+                schemas.StudentQuiz(
+                    quiz_id=quiz.id,
+                    question=quiz.question,
+                    options=options,
+                    answer=quiz.answer,
+                    my_answer=my_selected,
+                    is_correct=is_correct,
+                    explanation=quiz.explanation,
+                    memo=memo_map.get(quiz.id),
+                    class_wrong_rate=class_wrong_rate,
+                )
             )
 
-            # 필터 적용
-            if filter == "wrong" and is_correct is not False:
-                continue
-            if filter == "hot":
-                # hot 필터는 정렬 시점에 처리
-                pass
-
-            set_quizzes.append(quiz_review)
-
-        # hot 필터: 오답률 높은 순 정렬
-        if filter == "hot":
-            set_quizzes.sort(key=lambda q: q.wrong_rate, reverse=True)
-
-        quiz_reviews.append(
-            schemas.SetReview(
+        sets_data.append(
+            schemas.StudentSet(
                 set_id=quiz_set.id,
                 set_number=quiz_set.set_number,
+                page_start=quiz_set.page_start,
+                page_end=quiz_set.page_end,
+                quiz_count=set_quiz_count,
+                my_correct_count=my_set_correct_count,
+                my_correct_rate=my_set_correct_rate,
                 quizzes=set_quizzes,
             )
         )
 
+    # 5. 전체 통계 계산
+    my_total_correct_rate = (
+        (total_correct_count / total_quiz_count * 100)
+        if total_quiz_count > 0
+        else 0.0
+    )
+
     return schemas.StudentReviewResponse(
         lecture_id=lecture_id,
-        my_scores=my_scores,
-        quiz_reviews=quiz_reviews,
+        week=0,  # TODO: 강의 주차 정보 계산 또는 모델에서 가져오기
+        date=format_date(lecture.date),
+        my_stats=schemas.StudentStats(
+            total_quiz_count=total_quiz_count,
+            my_correct_count=total_correct_count,
+            my_correct_rate=my_total_correct_rate,
+        ),
+        sets=sets_data,
     )
