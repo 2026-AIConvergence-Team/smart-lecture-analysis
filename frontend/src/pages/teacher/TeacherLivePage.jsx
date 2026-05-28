@@ -99,7 +99,23 @@ function TeacherLivePage() {
   const [extractedKeywords, setExtractedKeywords] = useState([]);
   const [selectedKeywords, setSelectedKeywords] = useState([]);
   const [keywordConceptMap, setKeywordConceptMap] = useState({}); // keyword → concept_id
-  const [quizDraft, setQuizDraft] = useState(currentQuizSet);
+  const [quizDraft, setQuizDraft] = useState(() =>
+    (currentQuizSet || []).map((q, i) =>
+      q.quiz_id !== undefined
+        ? {
+            id: q.quiz_id,
+            setId: q.set_id,
+            n: i + 1,
+            keyword: q.concept || "개념",
+            type: q.quiz_type === "OX" ? "OX" : q.quiz_type === "BLANK" ? "빈칸형" : "객관식",
+            question: q.question,
+            choices: Array.isArray(q.options) ? q.options : [],
+            answer: Array.isArray(q.options) ? Math.max(0, q.options.indexOf(q.answer)) : 0,
+            explain: q.explanation || "",
+          }
+        : q
+    )
+  );
   const [concepts, setConcepts] = useState([]);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
   const [manualForm, setManualForm] = useState(null);   // null = 숨김
@@ -429,6 +445,13 @@ function TeacherLivePage() {
       .map((kw) => keywordConceptMap[kw] ?? concepts.find((c) => c.concept_name === kw)?.concept_id)
       .filter(Boolean);
 
+    // concept_id → 사용자가 선택한 키워드 역매핑
+    const conceptIdToKeyword = {};
+    selectedKeywords.forEach((kw) => {
+      const cid = keywordConceptMap[kw] ?? concepts.find((c) => c.concept_name === kw)?.concept_id;
+      if (cid) conceptIdToKeyword[cid] = kw;
+    });
+
     setLoadingQuiz(true);
     generateQuizzes(lectureId, {
       page_start: rangeStart,
@@ -443,7 +466,7 @@ function TeacherLivePage() {
           id: q.quiz_id,
           setId: q.set_id,
           n: i + 1,
-          keyword: q.concept || concepts.find((c) => c.concept_id === q.concept_id)?.concept_name || "개념",
+          keyword: conceptIdToKeyword[q.concept_id] || q.concept || "개념",
           type: q.quiz_type === "OX" ? "OX" : q.quiz_type === "BLANK" ? "빈칸형" : "객관식",
           question: q.question,
           choices: Array.isArray(q.options) ? q.options : [],

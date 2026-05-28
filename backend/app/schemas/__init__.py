@@ -1,11 +1,21 @@
 from app.schemas.auth import Token, UserCreate, UserLogin, UserRole
+from app.schemas.course import (
+    CourseCreate,
+    CourseResponse,
+    CourseUpdate,
+    CourseWithLecturesResponse,
+)
 from app.schemas.lecture import (
     ConceptDetail,
     LectureAnalyzeRequest,
     LectureAnalyzeResponse,
+    LectureCodeResponse,
     LectureConceptsResponse,
     LectureCreate,
+    LectureJoinRequest,
+    LectureJoinResponse,
     LectureResponse,
+    LectureStatusUpdateRequest,
     PDFUploadResponse,
     PagePreview,
     TextExtractStartResponse,
@@ -13,16 +23,33 @@ from app.schemas.lecture import (
 )
 from app.schemas.quiz import (
     ManualQuizCreateRequest,
+    LectureQuizSetsWithQuizzesResponse,
     QuizGenerateRequest,
     QuizGenerateResponse,
     QuizGenerateStatusResponse,
     QuizItemResponse,
     QuizListResponse,
+    QuizMutationResponse,
     QuizRegenerateRequest,
+    QuizSetResponse,
+    QuizSetWithQuizzesResponse,
+    QuizSetStatusUpdateRequest,
     QuizStatusUpdateRequest,
     QuizUpdateRequest,
 )
 from app.schemas.user import UserResponse
+from app.schemas.submission import (
+    SubmissionCreate,
+    SubmissionResponse,
+    SubmissionAnswerResponse,
+    AnswerItem,
+    QuizSetSubmissionCreate,
+)
+from app.schemas.memo import MemoCreate, MemoResponse, MemoUpdate
+from app.schemas.anonymous_question import (
+    AnonymousQuestionCreate,
+    AnonymousQuestionResponse,
+)
 
 __all__ = [
     "UserRole",
@@ -30,8 +57,16 @@ __all__ = [
     "UserLogin",
     "UserResponse",
     "Token",
+    "CourseCreate",
+    "CourseUpdate",
+    "CourseResponse",
+    "CourseWithLecturesResponse",
     "LectureCreate",
     "LectureResponse",
+    "LectureStatusUpdateRequest",
+    "LectureCodeResponse",
+    "LectureJoinRequest",
+    "LectureJoinResponse",
     "PDFUploadResponse",
     "TextExtractStartResponse",
     "PagePreview",
@@ -40,13 +75,28 @@ __all__ = [
     "LectureAnalyzeResponse",
     "ConceptDetail",
     "LectureConceptsResponse",
+    "LectureQuizSetsWithQuizzesResponse",
     "QuizGenerateRequest",
     "QuizGenerateResponse",
     "QuizGenerateStatusResponse",
     "QuizItemResponse",
     "QuizListResponse",
+    "QuizMutationResponse",
     "QuizRegenerateRequest",
     "QuizUpdateRequest",
     "ManualQuizCreateRequest",
     "QuizStatusUpdateRequest",
+    "QuizSetStatusUpdateRequest",
+    "QuizSetResponse",
+    "QuizSetWithQuizzesResponse",
+    "SubmissionCreate",
+    "QuizSetSubmissionCreate",
+    "SubmissionResponse",
+    "SubmissionAnswerResponse",
+    "AnswerItem",
+    "MemoCreate",
+    "MemoUpdate",
+    "MemoResponse",
+    "AnonymousQuestionCreate",
+    "AnonymousQuestionResponse",
 ]

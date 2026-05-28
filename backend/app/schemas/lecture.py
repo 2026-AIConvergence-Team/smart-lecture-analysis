@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # 1. 강의 생성 Request
 class LectureCreate(BaseModel):
+    course_id: int = Field(..., gt=0)
     title: str = Field(..., min_length=1)
     date: date
     time: time
@@ -17,11 +18,39 @@ class LectureResponse(BaseModel):
 
     # 데이터베이스의 id 필드를 프론트엔드 명세서 규칙인 'lecture_id'로 변환하여 출력합니다.
     lecture_id: int = Field(..., alias="id")
+    course_id: Optional[int] = None
     title: str
     date: date
     time: time
     class_code: Optional[str] = None
+    status: str
     created_at: datetime
+
+
+class LectureCodeResponse(BaseModel):
+    lecture_id: int
+    class_code: str
+
+
+class LectureJoinRequest(BaseModel):
+    class_code: str = Field(..., min_length=1)
+
+
+class LectureJoinResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    participant_id: int
+    lecture_id: int
+    course_id: Optional[int] = None
+    user_id: int
+    joined_at: datetime
+    class_code: str
+    already_joined: bool = False
+    course_already_joined: bool = False
+
+
+class LectureStatusUpdateRequest(BaseModel):
+    status: str
 
 
 # 3. PDF 업로드 성공 Response
@@ -81,6 +110,8 @@ class ConceptDetail(BaseModel):
     page: int
     keywords: List[str]
     sentences: List[str]
+    image_paths: List[str] = []
+    image_descriptions: List[str] = []
 
 
 # 10. 개념 목록 조회 최종 Response
