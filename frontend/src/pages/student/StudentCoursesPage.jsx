@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import RoleLayout from "../../components/RoleLayout.jsx";
-import { listCourses } from "../../api/courseApi.js";
+import { getCourses } from "../../api/courseApi.js";
 import { joinLectureByCode } from "../../api/lectureApi.js";
 
 function getLectureId(lecture) {
