@@ -5,6 +5,9 @@ ALGORITHM_QUIZ_TYPES = [
     "SUBJECTIVE",
 ]
 
+# Keep SUBJECTIVE support in the codebase, but disable new generation for now.
+SUBJECTIVE_GENERATION_ENABLED = False
+
 MAX_SHORT_ANSWER_LENGTH = 30
 MAX_OPTION_LENGTH = 90
 MAX_SOURCE_SENTENCE_LENGTH = 160
