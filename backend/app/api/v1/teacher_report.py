@@ -131,6 +131,10 @@ def get_teacher_report(
                 db, quiz.id
             )
 
+            correct_rate = 0.0
+            top_wrong_answer = None
+            top_wrong_rate = 0.0
+
             if all_answers:
                 correct_count = sum(1 for a in all_answers if a.is_correct)
                 total_count = len(all_answers)
@@ -148,8 +152,6 @@ def get_teacher_report(
 
                 # top_wrong_answer와 top_wrong_rate 계산
                 wrong_answers = [a.selected for a in all_answers if not a.is_correct]
-                top_wrong_answer = None
-                top_wrong_rate = 0.0
                 if wrong_answers:
                     top_wrong_answer = Counter(wrong_answers).most_common(1)[0][0]
                     top_wrong_count = Counter(wrong_answers).most_common(1)[0][1]
@@ -159,15 +161,15 @@ def get_teacher_report(
                         else 0.0
                     )
 
-                quiz_results.append(
-                    schemas.TeacherQuiz(
-                        quiz_id=quiz.id,
-                        question=quiz.question,
-                        correct_rate=correct_rate,
-                        top_wrong_answer=top_wrong_answer,
-                        top_wrong_rate=top_wrong_rate,
-                    )
+            quiz_results.append(
+                schemas.TeacherQuiz(
+                    quiz_id=quiz.id,
+                    question=quiz.question,
+                    correct_rate=correct_rate,
+                    top_wrong_answer=top_wrong_answer,
+                    top_wrong_rate=top_wrong_rate,
                 )
+            )
 
         # 세트별 평균 정답률
         set_avg_correct_rate = (
@@ -190,18 +192,19 @@ def get_teacher_report(
             )
         )
 
-    # 3. 개념별 이해도 계산 (is_weak < 50)
+    # 3. 개념별 이해도 계산 (퀴즈가 출제된 개념만 포함)
     concepts = concept_repository.get_concepts_by_lecture(db, lecture_id)
     concept_stats = []
 
     for concept in concepts:
-        if concept.id in concept_correct_counts:
-            correct_count, total_count = concept_correct_counts[concept.id]
-            correct_rate = (
-                (correct_count / total_count * 100) if total_count > 0 else 0.0
-            )
-        else:
-            correct_rate = 0.0
+        # 퀴즈가 출제된 개념만 처리
+        if concept.id not in concept_correct_counts:
+            continue
+
+        correct_count, total_count = concept_correct_counts[concept.id]
+        correct_rate = (
+            (correct_count / total_count * 100) if total_count > 0 else 0.0
+        )
 
         is_weak = correct_rate < 50
 
