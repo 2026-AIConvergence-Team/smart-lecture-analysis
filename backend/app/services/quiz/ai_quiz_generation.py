@@ -22,6 +22,7 @@ from app.services.quiz.quiz_generation import (
     unique_keep_order,
     get_refined_concept_label_for_ai,
     get_safe_keywords_for_ai,
+    is_generation_quiz_type_enabled,
     is_cut_or_dangling_text,
     is_definition_answer_quality,
     select_source_sentences_for_ai,
@@ -1660,6 +1661,8 @@ def clean_batch_ai_quiz(
             default="MULTIPLE_CHOICE",
         ),
     )
+    if not is_generation_quiz_type_enabled(quiz_type):
+        return reject(f"quiz_type generation is currently disabled: {quiz_type}")
 
     question = normalize_ai_text(raw_quiz.get("question"))
     answer = normalize_ai_text(raw_quiz.get("answer"))
