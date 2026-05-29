@@ -34,6 +34,9 @@ export function getCourses() {
   return request("/api/courses");
 }
 
+// alias (StudentCoursesPage 호환)
+export const listCourses = getCourses;
+
 // ── 과목 생성 ──────────────────────────────────────────
 // POST /api/courses
 // { title, department, year, semester, schedule, student_count, section }

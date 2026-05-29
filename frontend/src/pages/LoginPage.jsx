@@ -29,6 +29,9 @@ function LoginPage() {
       localStorage.setItem("user_email", me.email);
       // 역할별 토큰 분리 저장 (같은 브라우저에서 교수+학생 동시 테스트 지원)
       localStorage.setItem(`${me.role}_access_token`, tokenData.access_token);
+      // 탭별 세션 저장 — 같은 브라우저에서 교수/학생 동시 로그인 시 토큰 충돌 방지
+      sessionStorage.setItem("access_token", tokenData.access_token);
+      sessionStorage.setItem("user_role", me.role);
 
       // 3. role에 따라 페이지 이동
       const destination = me.role === "teacher" ? "/teacher/courses" : "/student/courses";

@@ -5,6 +5,7 @@ import RoleLayout from "../../components/RoleLayout.jsx";
 import { keywordsFor, quizFromKeyword, SAMPLE_QUESTIONS } from "../../data/quizSyncMock.js";
 import { setPdfCache, clearSession } from "../../data/sessionCache.js";
 import { createLecture, uploadPdf, analyzePdf, getConcepts, generateQuizzes, getQuizGenerateStatus, generateClassCode, updateLectureStatus } from "../../api/lectureApi.js";
+import useBroadcastChannel from "../../hooks/useBroadcastChannel.js";
 
 const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -33,6 +34,9 @@ function TeacherSetupPage() {
   const courseName = location.state?.courseName || "자료구조론";
   const week       = location.state?.week       || 5;
   const courseMeta = location.state?.courseMeta || "2025-1 / 월,수,금";
+
+  // BroadcastChannel — 새 세션 시작 알림용 (학생 이전 PDF 초기화)
+  const emit = useBroadcastChannel("quizsync-v2");
 
   // 상태 관리
   const [lectureId, setLectureId] = useState(null);   // DB에 생성된 강의 ID
@@ -66,6 +70,8 @@ function TeacherSetupPage() {
       .then((data) => {
         const id = data.lecture_id ?? data.id;
         setLectureId(id);
+        // 이전 세션에 남아있는 학생 탭에게 새 강의 시작을 알려 PDF 초기화
+        emit("LECTURE_CHANGED", { lectureId: id });
         if (data.class_code) {
           setCode(data.class_code);  // 서버 발급 코드 사용
         } else {
