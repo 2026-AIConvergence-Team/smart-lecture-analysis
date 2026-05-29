@@ -1,7 +1,10 @@
 const API_BASE_URL = "";
 
 async function request(path, options = {}) {
-  const token = localStorage.getItem("access_token");
+  // sessionStorage 우선 — 같은 브라우저에서 교수/학생 탭이 동시에 열릴 때 탭별 토큰 사용
+  const token =
+    sessionStorage.getItem("access_token") ||
+    localStorage.getItem("access_token");
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
       "Content-Type": "application/json",
@@ -41,12 +44,5 @@ export function logout() {
 }
 
 export function getMe() {
-  const token = localStorage.getItem("access_token");
-
-  return request("/users/me", {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
+  return request("/users/me", { method: "GET" });
 }

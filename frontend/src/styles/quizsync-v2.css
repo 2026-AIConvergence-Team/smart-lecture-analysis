@@ -327,7 +327,7 @@ body[data-role="student"] .profile-card .av { background:var(--brand); }
 .card-sub { font-size:12px; color:var(--zinc-500); margin-top:3px; }
 
 .flow-card {
-  position:relative; overflow:hidden;
+  position:relative;
 }
 .flow-card::before {
   content:''; position:absolute; inset:0 0 auto; height:3px;
@@ -1134,9 +1134,8 @@ body[data-role="student"] .pdf-lock-overlay {
   max-width: none;
 }
 .review-pdf-panel {
-  width: 40%;
+  flex: 0 0 40%;
   min-width: 300px;
-  max-width: 500px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;

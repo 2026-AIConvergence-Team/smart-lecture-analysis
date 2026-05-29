@@ -1,362 +1,225 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ChevronLeft, ChevronRight, FileText } from "lucide-react";
+import { useLocation } from "react-router-dom";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import PdfViewer from "../../components/PdfViewer.jsx";
 import { getPdfCache } from "../../data/sessionCache.js";
-
-const WEEKS = [
-  { week: 3, date: "2026.04.29" },
-  { week: 4, date: "2026.05.06" },
-  { week: 5, date: "2026.05.13" },
-  { week: 6, date: "2026.05.20" },
-];
-
-const REVIEW_COURSES = [
-  {
-    id: "ds",
-    title: "자료구조론",
-    meta: "컴퓨터공학과 · 월/수 10:30",
-    week: 5,
-    weeks: WEEKS,
-  },
-  {
-    id: "os",
-    title: "운영체제",
-    meta: "컴퓨터공학과 · 화/목 13:30",
-    week: 4,
-    weeks: [
-      { week: 2, date: "2026.04.15" },
-      { week: 3, date: "2026.04.22" },
-      { week: 4, date: "2026.04.29" },
-    ],
-  },
-  {
-    id: "algo",
-    title: "알고리즘 설계",
-    meta: "소프트웨어학부 · 금 09:00",
-    week: 5,
-    weeks: [
-      { week: 3, date: "2026.04.24" },
-      { week: 4, date: "2026.05.01" },
-      { week: 5, date: "2026.05.08" },
-    ],
-  },
-  {
-    id: "db",
-    title: "데이터베이스",
-    meta: "컴퓨터공학과 · 화/목 13:30",
-    week: 15,
-    weeks: [
-      { week: 13, date: "2025.12.02" },
-      { week: 14, date: "2025.12.09" },
-      { week: 15, date: "2025.12.16" },
-    ],
-  },
-];
-
-// Mock quiz sets for review
-// studentAnswer: index the student chose, answer: correct index
-const SETS = [
-  {
-    id: 1,
-    label: "세트 #1",
-    pdfRange: "p.1–5",
-    startPage: 1,
-    quizzes: [
-      {
-        id: 1001,
-        n: "Q1",
-        keyword: "스택",
-        question: "스택은 ___ 구조를 따르는 선형 자료구조이다",
-        choices: ["LIFO", "FIFO", "트리", "그래프"],
-        answer: 0,
-        studentAnswer: 0,
-        errorRate: 21,
-        explain: "스택(Stack)은 Last-In-First-Out(LIFO) 구조로, 가장 마지막에 들어간 데이터가 가장 먼저 나옵니다.",
-      },
-      {
-        id: 1002,
-        n: "Q2",
-        keyword: "rear/front",
-        question: "큐에서 삽입은 ___ 에서 이루어진다",
-        choices: ["rear", "front", "top", "bottom"],
-        answer: 0,
-        studentAnswer: 1,
-        errorRate: 52,
-        explain: "큐는 rear(뒤)에서 삽입(enqueue), front(앞)에서 삭제(dequeue)합니다.",
-      },
-      {
-        id: 1003,
-        n: "Q3",
-        keyword: "push/pop",
-        question: "스택의 push 연산은 top을 1 증가시킨다",
-        choices: ["O", "X"],
-        answer: 0,
-        studentAnswer: 0,
-        errorRate: 27,
-        explain: "push는 top을 +1 한 뒤 해당 위치에 데이터를 저장합니다. pop은 반대로 동작합니다.",
-      },
-    ],
-  },
-  {
-    id: 2,
-    label: "세트 #2",
-    pdfRange: "p.4–8",
-    startPage: 4,
-    quizzes: [
-      {
-        id: 1004,
-        n: "Q1",
-        keyword: "연결 리스트",
-        question: "연결 리스트의 각 요소를 ___ 라고 한다",
-        choices: ["노드", "배열", "셀", "블록"],
-        answer: 0,
-        studentAnswer: 0,
-        errorRate: 18,
-        explain: "연결 리스트의 각 요소는 데이터와 다음 노드 참조를 가진 노드(Node)입니다.",
-      },
-      {
-        id: 1005,
-        n: "Q2",
-        keyword: "단일 연결",
-        question: "단일 연결 리스트는 역방향 순회가 O(1)이다",
-        choices: ["O", "X"],
-        answer: 1,
-        studentAnswer: 0,
-        errorRate: 61,
-        explain: "단일 연결 리스트는 다음 참조만 있어 역방향 순회가 O(n)으로 느립니다.",
-      },
-    ],
-  },
-];
-
-const COURSE_SETS = {
-  ds: SETS,
-  os: [
-    {
-      id: 1,
-      label: "세트 #1",
-      pdfRange: "p.2–6",
-      startPage: 2,
-      quizzes: [
-        {
-          id: 2001,
-          n: "Q1",
-          keyword: "프로세스",
-          question: "실행 중인 프로그램을 무엇이라고 하나요?",
-          choices: ["프로세스", "스레드", "커널", "캐시"],
-          answer: 0,
-          studentAnswer: 0,
-          errorRate: 24,
-          explain: "프로세스는 메모리에 올라와 실행 중인 프로그램 단위입니다.",
-        },
-        {
-          id: 2002,
-          n: "Q2",
-          keyword: "스케줄링",
-          question: "CPU 스케줄링의 주된 목적은?",
-          choices: ["CPU 효율 향상", "디스크 포맷", "네트워크 암호화", "파일 압축"],
-          answer: 0,
-          studentAnswer: 2,
-          errorRate: 47,
-          explain: "스케줄링은 준비 큐의 프로세스 중 CPU를 배정할 대상을 정해 효율을 높입니다.",
-        },
-      ],
-    },
-  ],
-  algo: [
-    {
-      id: 1,
-      label: "세트 #1",
-      pdfRange: "p.3–7",
-      startPage: 3,
-      quizzes: [
-        {
-          id: 3001,
-          n: "Q1",
-          keyword: "Big-O",
-          question: "이진 탐색의 시간 복잡도는?",
-          choices: ["O(log n)", "O(n)", "O(n²)", "O(1)"],
-          answer: 0,
-          studentAnswer: 0,
-          errorRate: 19,
-          explain: "이진 탐색은 탐색 범위를 절반씩 줄이므로 O(log n)입니다.",
-        },
-        {
-          id: 3002,
-          n: "Q2",
-          keyword: "정렬",
-          question: "퀵 정렬의 평균 시간 복잡도는?",
-          choices: ["O(n log n)", "O(n)", "O(log n)", "O(n³)"],
-          answer: 0,
-          studentAnswer: 1,
-          errorRate: 39,
-          explain: "퀵 정렬은 평균적으로 분할이 균형 있게 일어나 O(n log n)입니다.",
-        },
-      ],
-    },
-  ],
-  db: [
-    {
-      id: 1,
-      label: "세트 #1",
-      pdfRange: "p.8–12",
-      startPage: 8,
-      quizzes: [
-        {
-          id: 4001,
-          n: "Q1",
-          keyword: "정규화",
-          question: "데이터 중복을 줄이고 이상 현상을 방지하는 설계 과정은?",
-          choices: ["정규화", "파티셔닝", "인덱싱", "샤딩"],
-          answer: 0,
-          studentAnswer: 0,
-          errorRate: 22,
-          explain: "정규화는 중복과 삽입/삭제/갱신 이상을 줄이기 위한 관계형 DB 설계 과정입니다.",
-        },
-        {
-          id: 4002,
-          n: "Q2",
-          keyword: "트랜잭션",
-          question: "트랜잭션의 ACID 중 일관성은 무엇을 의미하나요?",
-          choices: ["규칙을 만족한 상태 유지", "동시 실행 차단", "항상 빠른 조회", "로그 삭제"],
-          answer: 0,
-          studentAnswer: 2,
-          errorRate: 44,
-          explain: "일관성은 트랜잭션 전후 데이터가 정의된 제약조건과 규칙을 만족해야 함을 뜻합니다.",
-        },
-      ],
-    },
-  ],
-};
-
-const MEMO_PREFIX = "quizsync-memo-5-";
-const LIVE_RESULTS_KEY = "quizsync-liveresults-5";
-
-function loadMemo(qid) {
-  try {
-    return localStorage.getItem(MEMO_PREFIX + qid) || "";
-  } catch {
-    return "";
-  }
-}
-
-function loadLiveSets() {
-  try {
-    const raw = localStorage.getItem(LIVE_RESULTS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {}
-  return null;
-}
-
-function saveMemo(qid, text) {
-  try {
-    localStorage.setItem(MEMO_PREFIX + qid, text);
-  } catch {}
-}
+import { getCourses, getCourseLectures } from "../../api/courseApi.js";
+import { getLectureReview, createMemo, updateMemo } from "../../api/lectureApi.js";
 
 function StudentReviewPage() {
+  const location = useLocation();
   const pdfCache = getPdfCache();
-  const [activeCourseId, setActiveCourseId] = useState("ds");
-  const activeCourse = REVIEW_COURSES.find((course) => course.id === activeCourseId) || REVIEW_COURSES[0];
-  const [currentWeek, setCurrentWeek] = useState(activeCourse.week);
-  // Load real session data if available for 자료구조론, fall back to per-course mock sets.
-  const [sets, setSets] = useState(() => loadLiveSets() || COURSE_SETS.ds);
-  const [activeSetId, setActiveSetId] = useState(() => {
-    const live = loadLiveSets();
-    return live ? live[0]?.id : 1;
-  });
+  // 수업 직후 이동 시 전달받는 lectureId (자동 선택용)
+  const locationLectureId = location.state?.lectureId ? Number(location.state.lectureId) : null;
+
+  const [courses, setCourses] = useState([]);
+  const [lecturesByCourse, setLecturesByCourse] = useState({});
+  const [activeCourseId, setActiveCourseId] = useState(null);
+  const [activeLectureIdx, setActiveLectureIdx] = useState(0);
+
+  const [review, setReview] = useState(null);
+  const [coursesLoading, setCoursesLoading] = useState(true);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewError, setReviewError] = useState("");
+
+  const [activeSetIdx, setActiveSetIdx] = useState(0);
   const [filterMode, setFilterMode] = useState("all");
+  const [memos, setMemos] = useState({});
+  // quiz_id → "none" | "exists" (서버에 메모가 있는지 여부)
+  const memoStateRef = useRef({});
+
   const [pdfPage, setPdfPage] = useState(1);
-  const [pdfData, setPdfData] = useState(() => pdfCache.pdfData);
-  const [memos, setMemos] = useState(() => {
-    const allSets = loadLiveSets() || SETS;
-    const m = {};
-    allSets.forEach((s) =>
-      s.quizzes.forEach((q) => {
-        m[q.id] = loadMemo(q.id);
-      })
-    );
-    return m;
-  });
+  const [pdfData] = useState(() => pdfCache.pdfData);
 
+  // 강의 목록 초기 로드
   useEffect(() => {
-    const nextCourse = REVIEW_COURSES.find((course) => course.id === activeCourseId) || REVIEW_COURSES[0];
-    const nextSets = activeCourseId === "ds" ? loadLiveSets() || COURSE_SETS.ds : COURSE_SETS[activeCourseId];
-    setCurrentWeek(nextCourse.week);
-    setSets(nextSets);
-    setActiveSetId(nextSets[0]?.id || 1);
-    setPdfPage(nextSets[0]?.startPage || 1);
-    setFilterMode("all");
+    setCoursesLoading(true);
+    getCourses()
+      .then(async (list) => {
+        setCourses(list);
+        if (list.length === 0) return;
 
-    const nextMemos = {};
-    nextSets.forEach((s) =>
-      s.quizzes.forEach((q) => {
-        nextMemos[q.id] = loadMemo(q.id);
+        // lectureId가 전달된 경우: 해당 강의가 속한 과목을 찾아 자동 선택
+        if (locationLectureId) {
+          for (const course of list) {
+            const lectures = await getCourseLectures(course.id).catch(() => []);
+            setLecturesByCourse((prev) => ({ ...prev, [course.id]: lectures }));
+            const idx = lectures.findIndex(
+              (l) => Number(l.id ?? l.lecture_id) === locationLectureId
+            );
+            if (idx !== -1) {
+              setActiveCourseId(course.id);
+              setActiveLectureIdx(idx);
+              return; // 찾았으면 종료
+            }
+          }
+        }
+
+        // 기본: 첫 번째 과목의 마지막 강의
+        const firstId = list[0].id;
+        setActiveCourseId(firstId);
+        const lectures = await getCourseLectures(firstId).catch(() => []);
+        setLecturesByCourse((prev) => ({ ...prev, [firstId]: lectures }));
+        setActiveLectureIdx(lectures.length > 0 ? lectures.length - 1 : 0);
       })
-    );
-    setMemos(nextMemos);
-  }, [activeCourseId]);
-
-  // Apply student theme
-  useEffect(() => {
-    document.body.setAttribute("data-role", "student");
-    return () => document.body.removeAttribute("data-role");
+      .catch((err) => console.error(err))
+      .finally(() => setCoursesLoading(false));
   }, []);
 
-  // Jump to this set's starting page in the PDF when the tab changes
+  const handleCourseChange = async (courseId) => {
+    const numId = Number(courseId);
+    setActiveCourseId(numId);
+    setReview(null);
+    setReviewError("");
+    setActiveSetIdx(0);
+    setFilterMode("all");
+    setMemos({});
+    if (!lecturesByCourse[numId]) {
+      const lectures = await getCourseLectures(numId).catch(() => []);
+      setLecturesByCourse((prev) => ({ ...prev, [numId]: lectures }));
+      setActiveLectureIdx(lectures.length > 0 ? lectures.length - 1 : 0);
+    } else {
+      const lectures = lecturesByCourse[numId] || [];
+      setActiveLectureIdx(lectures.length > 0 ? lectures.length - 1 : 0);
+    }
+  };
+
+  const activeLectures = (activeCourseId ? lecturesByCourse[activeCourseId] : null) || [];
+  const activeLecture = activeLectures[activeLectureIdx] || null;
+  const activeLectureId = activeLecture?.id ?? activeLecture?.lecture_id ?? null;
+
+  // 수업 변경 시 복습 로드
   useEffect(() => {
-    const set = sets.find((s) => s.id === activeSetId);
-    if (set?.startPage) setPdfPage(set.startPage);
-  }, [activeSetId, sets]);
+    if (!activeLectureId) return;
+    setReviewLoading(true);
+    setReview(null);
+    setReviewError("");
+    setActiveSetIdx(0);
+    setFilterMode("all");
+    getLectureReview(activeLectureId)
+      .then((data) => {
+        // my_answer가 null인 경우 localStorage 폴백으로 병합
+        let localAnswers = {};
+        try {
+          localAnswers = JSON.parse(
+            localStorage.getItem(`quizsync-myanswers-${activeLectureId}`) || "{}"
+          );
+        } catch {}
+        const hasLocal = Object.keys(localAnswers).length > 0;
 
-  const weekData =
-    activeCourse.weeks.find((w) => w.week === currentWeek) ||
-    activeCourse.weeks[activeCourse.weeks.length - 1];
-  const activeSet = sets.find((s) => s.id === activeSetId) || sets[0];
+        // my_answer 병합 + is_correct 재계산
+        // my_answer는 백엔드에서 "1"/"2" 번호 또는 텍스트, localStorage에서는 텍스트로 올 수 있음
+        const mergeQuiz = (quiz) => {
+          const my_answer = quiz.my_answer ?? (hasLocal ? localAnswers[String(quiz.quiz_id)] ?? null : null);
+          let is_correct = quiz.is_correct;
+          if ((is_correct === null || is_correct === undefined) && my_answer) {
+            const num = parseInt(my_answer, 10);
+            const myIdx = !isNaN(num) && num >= 1 && num <= (quiz.options || []).length
+              ? num - 1
+              : (quiz.options || []).indexOf(my_answer);
+            const correctIdx = (quiz.options || []).indexOf(quiz.answer);
+            is_correct = myIdx !== -1 && myIdx === correctIdx;
+          }
+          return { ...quiz, my_answer, is_correct };
+        };
 
-  const handleWeekChange = (delta) => {
-    const idx = activeCourse.weeks.findIndex((w) => w.week === currentWeek);
-    const next = activeCourse.weeks[idx + delta];
-    if (next) setCurrentWeek(next.week);
+        // 세트별 quizzes 병합 + 세트 성적 재계산
+        const mergedSets = (data.sets || []).map((set) => {
+          const quizzes = (set.quizzes || []).map(mergeQuiz);
+          const setCorrect = quizzes.filter((q) => q.is_correct === true).length;
+          return { ...set, quizzes, my_correct_count: setCorrect, quiz_count: quizzes.length };
+        });
+
+        // 전체 my_stats도 병합된 데이터 기준으로 재계산
+        const allQuizzes = mergedSets.flatMap((s) => s.quizzes);
+        const totalCount = allQuizzes.length;
+        const correctCount = allQuizzes.filter((q) => q.is_correct === true).length;
+        const correctRate = totalCount > 0 ? (correctCount / totalCount) * 100 : 0;
+
+        const merged = {
+          ...data,
+          sets: mergedSets,
+          my_stats: {
+            ...(data.my_stats || {}),
+            total_quiz_count: totalCount,
+            my_correct_count: correctCount,
+            my_correct_rate: correctRate,
+          },
+        };
+
+        setReview(merged);
+        // 메모 초기값 + 상태 세팅
+        const initMemos = {};
+        const initMemoState = {};
+        (merged.sets || []).forEach((set) => {
+          (set.quizzes || []).forEach((quiz) => {
+            initMemos[quiz.quiz_id] = quiz.memo || "";
+            initMemoState[quiz.quiz_id] = quiz.memo != null ? "exists" : "none";
+          });
+        });
+        setMemos(initMemos);
+        memoStateRef.current = initMemoState;
+      })
+      .catch((err) => setReviewError(err.message))
+      .finally(() => setReviewLoading(false));
+  }, [activeLectureId]);
+
+  // 메모 변경 핸들러 (blur 시 서버 저장)
+  const handleMemoChange = (quizId, text) => {
+    setMemos((prev) => ({ ...prev, [quizId]: text }));
   };
 
-  const handleMemoChange = (qid, text) => {
-    setMemos((prev) => ({ ...prev, [qid]: text }));
-    saveMemo(qid, text);
+  const handleMemoBlur = async (quizId) => {
+    const content = memos[quizId] || "";
+    const state = memoStateRef.current[quizId];
+    try {
+      if (state === "exists") {
+        await updateMemo(quizId, content);
+      } else {
+        await createMemo(quizId, content);
+        memoStateRef.current = { ...memoStateRef.current, [quizId]: "exists" };
+      }
+    } catch (err) {
+      console.error("메모 저장 실패:", err.message);
+    }
   };
 
-  // Apply filter and sort
+  const activeCourse = courses.find((c) => c.id === activeCourseId);
+  const sets = review?.sets || [];
+  const activeSet = sets[activeSetIdx] || null;
+
+  // 필터 적용
   const filtered = (() => {
+    if (!activeSet) return [];
     let list = activeSet.quizzes;
     if (filterMode === "wrong") {
-      list = list.filter((q) => q.studentAnswer !== q.answer);
+      list = list.filter((q) => !q.is_correct);
     } else if (filterMode === "hot") {
-      list = [...list].sort((a, b) => b.errorRate - a.errorRate);
+      list = [...list].sort((a, b) => b.class_wrong_rate - a.class_wrong_rate);
     }
     return list;
   })();
 
-  const correctCount = activeSet.quizzes.filter(
-    (q) => q.studentAnswer === q.answer
-  ).length;
-  const score = Math.round((correctCount / activeSet.quizzes.length) * 100);
+  // PDF 페이지: 세트 탭 변경 시 해당 세트 시작 페이지로 이동
+  useEffect(() => {
+    if (activeSet?.page_start) setPdfPage(activeSet.page_start);
+  }, [activeSetIdx]);
 
   return (
     <RoleLayout role="student">
       <div className="review-split">
-        {/* Left: quiz review panel */}
+        {/* ── 왼쪽: 복습 패널 ── */}
         <div className="review-quiz-panel">
           <div className="content">
+
+            {/* 헤더 */}
             <div className="review-eyebrow-row">
               <p className="eyebrow">My Review</p>
               <label className="review-course-picker">
                 <span>강의</span>
-                <select value={activeCourseId} onChange={(e) => setActiveCourseId(e.target.value)}>
-                  {REVIEW_COURSES.map((course) => (
+                <select value={activeCourseId || ""} onChange={(e) => handleCourseChange(e.target.value)}>
+                  {courses.map((course) => (
                     <option key={course.id} value={course.id}>
                       {course.title}
                     </option>
@@ -364,273 +227,228 @@ function StudentReviewPage() {
                 </select>
               </label>
             </div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 18,
-                marginTop: 8,
-              }}
-            >
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18, marginTop: 8 }}>
               <div>
                 <h1 className="page-title">
-                  {activeCourse.title} {currentWeek}주차 복습
+                  {activeCourse?.title || "강의"} 복습
                 </h1>
                 <p className="page-sub">
-                  {activeCourse.meta} · 수업 중에 풀었던 퀴즈와 본인이 남긴 메모를 함께 확인할 수 있어요.
+                  {activeLecture?.date ? `${activeLecture.date} · ` : ""}수업 중에 풀었던 퀴즈와 메모를 함께 확인할 수 있어요.
                 </p>
               </div>
+              {/* 수업 네비게이션 */}
               <div className="week-nav">
-                <button className="btn-arrow" type="button" onClick={() => handleWeekChange(-1)}>
+                <button
+                  className="btn-arrow"
+                  type="button"
+                  onClick={() => { setActiveLectureIdx((i) => Math.max(0, i - 1)); setReview(null); setReviewError(""); setActiveSetIdx(0); setFilterMode("all"); }}
+                  disabled={activeLectureIdx <= 0}
+                >
                   <ChevronLeft size={16} />
                 </button>
                 <div className="now">
-                  {currentWeek}주차{" "}
-                  <span className="sub">{weekData.date}</span>
+                  {activeLecture?.title || "수업 없음"}{" "}
+                  <span className="sub">{activeLecture?.date || ""}</span>
                 </div>
-                <button className="btn-arrow" type="button" onClick={() => handleWeekChange(1)}>
+                <button
+                  className="btn-arrow"
+                  type="button"
+                  onClick={() => { setActiveLectureIdx((i) => Math.min(activeLectures.length - 1, i + 1)); setReview(null); setReviewError(""); setActiveSetIdx(0); setFilterMode("all"); }}
+                  disabled={activeLectureIdx >= activeLectures.length - 1}
+                >
                   <ChevronRight size={16} />
                 </button>
               </div>
             </div>
 
-            <div
-              style={{ display: "flex", flexDirection: "column", gap: 18, marginTop: 22 }}
-            >
-              {/* Score card */}
-              <div className="card card-pad flow-card">
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 16,
-                  }}
-                >
-                  <div>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 600,
-                        color: "var(--brand-deep)",
-                      }}
-                    >
-                      내 성적
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 20,
-                        fontWeight: 700,
-                        marginTop: 4,
-                      }}
-                    >
-                      {activeSet.label} · {activeSet.quizzes.length}문제 중{" "}
-                      {correctCount}개 정답
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 13,
-                        color: "var(--zinc-500)",
-                        marginTop: 6,
-                      }}
-                    >
-                      전체 평균보다 2%p 높음
-                    </div>
-                  </div>
-                  <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <div
-                      className="mono"
-                      style={{
-                        fontSize: 36,
-                        fontWeight: 700,
-                        color: "var(--brand-deep)",
-                      }}
-                    >
-                      {score}
-                      <span style={{ fontSize: 18 }}>%</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="bar" style={{ marginTop: 12 }}>
-                  <div style={{ width: `${score}%` }} />
-                </div>
+            {/* 로딩 */}
+            {(coursesLoading || reviewLoading) && (
+              <div className="card card-pad-lg" style={{ marginTop: 22, textAlign: "center", color: "var(--zinc-500)" }}>
+                {coursesLoading ? "강의 목록을 불러오는 중..." : "복습 데이터를 불러오는 중..."}
               </div>
+            )}
 
-              {/* Set tabs + filter */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  flexWrap: "wrap",
-                }}
-              >
-                <div className="set-tabs">
-                  {sets.map((s, i) => (
-                    <button
-                      key={s.id}
-                      className={`set-tab ${activeSetId === s.id ? "active" : ""}`}
-                      type="button"
-                      onClick={() => setActiveSetId(s.id)}
-                    >
-                      <span
-                        className="dot"
-                        style={{
-                          background: i === 0 ? "var(--brand)" : "var(--brand-2)",
-                        }}
-                      />
-                      {s.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="filter-group">
-                  <button
-                    className={filterMode === "all" ? "on" : ""}
-                    type="button"
-                    onClick={() => setFilterMode("all")}
-                  >
-                    전체 문제
-                  </button>
-                  <button
-                    className={filterMode === "wrong" ? "on" : ""}
-                    type="button"
-                    onClick={() => setFilterMode("wrong")}
-                  >
-                    내 오답만
-                  </button>
-                  <button
-                    className={filterMode === "hot" ? "on" : ""}
-                    type="button"
-                    onClick={() => setFilterMode("hot")}
-                  >
-                    오답률 높은 순
-                  </button>
-                </div>
+            {/* 수업 없음 */}
+            {!coursesLoading && courses.length > 0 && activeLectures.length === 0 && !reviewLoading && (
+              <div className="card card-pad-lg" style={{ marginTop: 22, textAlign: "center", color: "var(--zinc-500)" }}>
+                이 강의에 아직 수업이 없습니다.
               </div>
+            )}
 
-              {/* Quiz list */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                {filtered.length === 0 && (
-                  <div
-                    style={{
-                      textAlign: "center",
-                      padding: "32px 16px",
-                      color: "var(--zinc-500)",
-                      fontSize: 13,
-                    }}
-                  >
-                    해당하는 문제가 없습니다
-                  </div>
-                )}
-                {filtered.map((quiz) => {
-                  const isCorrect = quiz.studentAnswer === quiz.answer;
-                  return (
-                    <div key={quiz.id} className="quiz-item">
-                      <div className="quiz-item-head">
-                        <div className="q-num">
-                          <strong>{quiz.n}</strong>
-                          <span className="badge">{quiz.keyword}</span>
+            {/* 수업 미종료 */}
+            {!reviewLoading && reviewError === "LECTURE_NOT_ENDED" && (
+              <div className="card card-pad-lg" style={{ marginTop: 22, textAlign: "center", padding: "48px 24px" }}>
+                <div style={{ fontSize: 32, marginBottom: 10 }}>📅</div>
+                <span className="pill pill-warn" style={{ display: "inline-flex" }}>수업 전 / 진행 중</span>
+                <h3 style={{ marginTop: 10, fontSize: 17, fontWeight: 700, color: "var(--zinc-900)" }}>
+                  아직 수업이 종료되지 않았어요
+                </h3>
+                <p style={{ marginTop: 6, fontSize: 13, color: "var(--zinc-500)" }}>
+                  수업이 끝난 뒤 복습 내용이 이곳에 표시됩니다.
+                </p>
+              </div>
+            )}
+
+            {/* 기타 에러 */}
+            {!reviewLoading && reviewError && reviewError !== "LECTURE_NOT_ENDED" && (
+              <div className="card card-pad-lg" style={{ marginTop: 22, color: "var(--danger)" }}>
+                {reviewError}
+              </div>
+            )}
+
+            {/* ── 복습 본문 ── */}
+            {!reviewLoading && review && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 18, marginTop: 22 }}>
+
+                {/* 전체 성적 카드 */}
+                <div className="card card-pad flow-card">
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--brand-deep)" }}>내 성적</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, marginTop: 4 }}>
+                        전체 {review.my_stats.total_quiz_count}문제 중 {review.my_stats.my_correct_count}개 정답
+                      </div>
+                      {activeSet && (
+                        <div style={{ fontSize: 13, color: "var(--zinc-500)", marginTop: 6 }}>
+                          세트 #{activeSet.set_number} · {activeSet.quiz_count}문제 중 {activeSet.my_correct_count}개 정답
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <span
-                            style={{
-                              fontSize: 11,
-                              color: "var(--zinc-500)",
-                            }}
-                          >
-                            전체 오답률{" "}
-                            <span
-                              style={{
-                                fontWeight: 700,
-                                color:
-                                  quiz.errorRate >= 50
-                                    ? "var(--danger)"
-                                    : quiz.errorRate >= 30
-                                    ? "var(--warning-700)"
-                                    : "var(--zinc-700)",
-                              }}
-                            >
-                              {quiz.errorRate}%
+                      )}
+                    </div>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <div className="mono" style={{ fontSize: 36, fontWeight: 700, color: "var(--brand-deep)" }}>
+                        {Math.round(review.my_stats.my_correct_rate)}
+                        <span style={{ fontSize: 18 }}>%</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="bar" style={{ marginTop: 12 }}>
+                    <div style={{ width: `${review.my_stats.my_correct_rate}%` }} />
+                  </div>
+                </div>
+
+                {/* 세트 탭 + 필터 */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                  <div className="set-tabs">
+                    {sets.map((s, i) => (
+                      <button
+                        key={s.set_id}
+                        className={`set-tab ${activeSetIdx === i ? "active" : ""}`}
+                        type="button"
+                        onClick={() => { setActiveSetIdx(i); setFilterMode("all"); }}
+                      >
+                        <span className="dot" style={{ background: i === 0 ? "var(--brand)" : "var(--brand-2)" }} />
+                        세트 #{s.set_number}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="filter-group">
+                    <button className={filterMode === "all" ? "on" : ""} type="button" onClick={() => setFilterMode("all")}>전체 문제</button>
+                    <button className={filterMode === "wrong" ? "on" : ""} type="button" onClick={() => setFilterMode("wrong")}>내 오답만</button>
+                    <button className={filterMode === "hot" ? "on" : ""} type="button" onClick={() => setFilterMode("hot")}>오답률 높은 순</button>
+                  </div>
+                </div>
+
+                {/* 퀴즈 목록 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  {filtered.length === 0 && (
+                    <div style={{ textAlign: "center", padding: "32px 16px", color: "var(--zinc-500)", fontSize: 13 }}>
+                      해당하는 문제가 없습니다
+                    </div>
+                  )}
+                  {filtered.map((quiz, i) => {
+                    const isCorrect = quiz.is_correct;
+                    // my_answer가 "1"/"2" 번호형이든 텍스트든 0-based index로 정규화
+                    const myAnswerIdx = (() => {
+                      const ma = quiz.my_answer;
+                      if (ma === null || ma === undefined || ma === "") return -1;
+                      const num = parseInt(ma, 10);
+                      if (!isNaN(num) && num >= 1 && num <= (quiz.options || []).length) return num - 1;
+                      return (quiz.options || []).indexOf(ma);
+                    })();
+                    const hasAnswer = myAnswerIdx !== -1;
+                    return (
+                      <div key={quiz.quiz_id} className="quiz-item">
+                        <div className="quiz-item-head">
+                          <div className="q-num">
+                            <strong>Q{i + 1}</strong>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontSize: 11, color: "var(--zinc-500)" }}>
+                              전체 오답률{" "}
+                              <span style={{ fontWeight: 700, color: quiz.class_wrong_rate >= 50 ? "var(--danger)" : quiz.class_wrong_rate >= 30 ? "var(--warning-700)" : "var(--zinc-700)" }}>
+                                {Math.round(quiz.class_wrong_rate)}%
+                              </span>
                             </span>
-                          </span>
-                          <span
-                            className={`pill ${isCorrect ? "pill-success" : "pill-danger"}`}
-                            style={{ fontSize: 10 }}
-                          >
-                            {isCorrect ? "정답" : "오답"}
-                          </span>
+                            <span className={`pill ${!hasAnswer ? "pill-neutral" : isCorrect ? "pill-success" : "pill-danger"}`} style={{ fontSize: 10 }}>
+                              {!hasAnswer ? "미제출" : isCorrect ? "정답" : "오답"}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: 12, fontSize: 14, fontWeight: 500 }}>
+                          {quiz.question}
+                        </div>
+
+                        <div className={`choices ${(quiz.options || []).length <= 2 ? "col1" : ""}`} style={{ marginTop: 12 }}>
+                          {(quiz.options || []).map((option, idx) => {
+                            const correctIdx = (quiz.options || []).indexOf(quiz.answer);
+                            const wasSelected = idx === myAnswerIdx;
+                            const isAnswerOpt = idx === correctIdx;
+                            let cls = "";
+                            if (wasSelected && isAnswerOpt) cls = "correct";
+                            else if (wasSelected && !isAnswerOpt) cls = "wrong";
+                            else if (!wasSelected && isAnswerOpt) cls = "correct";
+                            return (
+                              <div key={idx} className={`choice ${cls}`} style={{ cursor: "default", justifyContent: "space-between" }}>
+                                <span>{String.fromCharCode(65 + idx)}. {option}</span>
+                                {isAnswerOpt && (
+                                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--success-700)", flexShrink: 0 }}>정답</span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {quiz.explanation && (
+                          <div className="explain-box">{quiz.explanation}</div>
+                        )}
+
+                        <div className="postit" style={{ marginTop: 12 }}>
+                          <div className="head">✏ 수업 중 메모</div>
+                          <textarea
+                            placeholder="메모를 남겨두세요..."
+                            value={memos[quiz.quiz_id] || ""}
+                            onChange={(e) => handleMemoChange(quiz.quiz_id, e.target.value)}
+                            onBlur={() => handleMemoBlur(quiz.quiz_id)}
+                          />
                         </div>
                       </div>
-
-                      <div
-                        style={{ marginTop: 12, fontSize: 14, fontWeight: 500 }}
-                      >
-                        {quiz.question}
-                      </div>
-
-                      <div
-                        className={`choices ${quiz.choices.length <= 2 ? "col1" : ""}`}
-                        style={{ marginTop: 12 }}
-                      >
-                        {quiz.choices.map((choice, i) => {
-                          const wasSelected = i === quiz.studentAnswer;
-                          const isAnswerCorrect = i === quiz.answer;
-                          let cls = "";
-                          if (wasSelected && isAnswerCorrect) cls = "correct";
-                          else if (wasSelected && !isAnswerCorrect) cls = "wrong";
-                          else if (!wasSelected && isAnswerCorrect) cls = "correct";
-                          return (
-                            <div
-                              key={i}
-                              className={`choice ${cls}`}
-                              style={{ cursor: "default", justifyContent: "space-between" }}
-                            >
-                              <span>{String.fromCharCode(65 + i)}. {choice}</span>
-                              {isAnswerCorrect && (
-                                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--success-700)", flexShrink: 0 }}>
-                                  정답
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      <div className="explain-box">{quiz.explain}</div>
-
-                      <div className="postit" style={{ marginTop: 12 }}>
-                        <div className="head">✏ 수업 중 메모</div>
-                        <textarea
-                          placeholder="메모를 남겨두세요..."
-                          value={memos[quiz.id] || ""}
-                          onChange={(e) => handleMemoChange(quiz.id, e.target.value)}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
 
-        {/* Right: PDF panel */}
+        {/* ── 오른쪽: PDF 패널 ── */}
         <div className="review-pdf-panel">
           <div className="review-pdf-header">
             <FileText size={14} style={{ flexShrink: 0 }} />
             <span>강의자료</span>
-            <span className="review-pdf-badge pill">
-              {activeSet.label} 범위 · {activeSet.pdfRange}
-            </span>
+            {activeSet && (
+              <span className="review-pdf-badge pill">
+                세트 #{activeSet.set_number} 범위 · p.{activeSet.page_start}–{activeSet.page_end}
+              </span>
+            )}
           </div>
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <PdfViewer
-              pdfData={activeCourseId === "ds" ? pdfData : null}
+              pdfData={pdfData}
               currentPage={pdfPage}
               onPageChange={setPdfPage}
-              initialTotalPages={activeCourseId === "ds" ? pdfCache.pdfTotal : 0}
+              initialTotalPages={pdfCache.pdfTotal || 0}
               role="student"
               variant="review"
             />

@@ -51,6 +51,13 @@ export function setPdfCache(data, fileName, total) {
   savePdfToSession(data, fileName, total);
 }
 
+export function clearPdfCache() {
+  cache.pdfData = null;
+  cache.pdfFileName = null;
+  cache.pdfTotal = 0;
+  try { sessionStorage.removeItem(SS_KEY); } catch {}
+}
+
 export function getPdfCache() {
   if (cache.pdfData) {
     return { pdfData: cache.pdfData, pdfFileName: cache.pdfFileName, pdfTotal: cache.pdfTotal };
@@ -120,12 +127,9 @@ export function getCourseInfo() {
 }
 
 export function clearSession() {
-  cache.pdfData = null;
-  cache.pdfFileName = null;
-  cache.pdfTotal = 0;
+  clearPdfCache();
   cache.quizSets = [];
   cache.questions = [];
   cache.courseInfo = null;
-  try { sessionStorage.removeItem(SS_KEY); } catch {}
   try { sessionStorage.removeItem(QUESTIONS_KEY); } catch {}
 }
