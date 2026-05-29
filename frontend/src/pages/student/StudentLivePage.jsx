@@ -4,26 +4,23 @@ import { LogOut, MessageCircle, Send } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import PdfViewer from "../../components/PdfViewer.jsx";
 import useBroadcastChannel from "../../hooks/useBroadcastChannel.js";
-import { appendQuestionCache, getPdfCache, setPdfCache } from "../../data/sessionCache.js";
-import { submitAnswers, createMemo, updateMemo, submitQuestion } from "../../api/lectureApi.js";
+import { appendQuestionCache, clearPdfCache, setPdfCache } from "../../data/sessionCache.js";
+import { submitAnswers, submitQuestion } from "../../api/lectureApi.js";
 
-const WEEK = 5;
-const MEMO_KEY = (qid) => `quizsync-memo-${WEEK}-${qid}`;
-const RESULTS_KEY = `quizsync-liveresults-${WEEK}`;
-
-function saveMemoToStorage(qid, text) {
-  try { localStorage.setItem(MEMO_KEY(qid), text); } catch {}
+function saveMemoToStorage(key, text) {
+  try { localStorage.setItem(key, text); } catch {}
 }
 
-function saveResultsToStorage(sets) {
-  try { localStorage.setItem(RESULTS_KEY, JSON.stringify(sets)); } catch {}
+function saveResultsToStorage(key, sets) {
+  try { localStorage.setItem(key, JSON.stringify(sets)); } catch {}
 }
 
 function StudentLivePage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { lectureId = null } = location.state || {};
-  const [pdfData, setPdfData] = useState(() => getPdfCache().pdfData);
+  const lectureId = location.state?.lectureId ?? null;
+  const lectureIdRef = useRef(lectureId);   // useCallback 내 stale closure 방지
+  const [pdfData, setPdfData] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   // activeSet: { setId, setIdx, questions }
   const [activeSet, setActiveSet] = useState(null);
@@ -35,17 +32,27 @@ function StudentLivePage() {
   const [chatbotInput, setChatbotInput] = useState("");
   const [recentQuestion, setRecentQuestion] = useState(null);
   const [classEnded, setClassEnded] = useState(false);
+  const [liveWeek, setLiveWeek] = useState(5);
+  const [liveCourseName, setLiveCourseName] = useState("자료구조론");
+  const liveWeekRef = useRef(5);
 
   // Refs for reading current state inside memoized callbacks
   const activeSetRef = useRef(null);
   const choicesRef = useRef({});
   const savedSetsRef = useRef([]); // accumulates closed sets for review
   const setCounterRef = useRef(0);
-  // 메모 백엔드 저장 여부 추적: { [quiz_id]: true } → true면 PATCH, 없으면 POST
-  const memoSavedRef = useRef({});
+  // QUIZ_SET_BACKEND_ID 수신 시 즉시(동기) 저장 → handleSubmit race condition 방지
+  const backendSetIdRef = useRef(null);
+  // LECTURE_CHANGED 수신 시 true → 이후 PDF_LOADED 무시 (이전 세션 탭 오염 방지)
+  const sessionInvalidatedRef = useRef(false);
 
   useEffect(() => { activeSetRef.current = activeSet; }, [activeSet]);
   useEffect(() => { choicesRef.current = choices; }, [choices]);
+  useEffect(() => { liveWeekRef.current = liveWeek; }, [liveWeek]);
+
+  useEffect(() => {
+    clearPdfCache();
+  }, []);
 
   // class-mode for slim topbar
   useEffect(() => {
@@ -59,6 +66,9 @@ function StudentLivePage() {
 
   const handleMessage = useCallback((msg) => {
     if (msg.type === "PDF_LOADED") {
+      // 세션이 무효화된 경우(LECTURE_CHANGED 수신 후) 이전 탭의 PDF를 차단
+      if (sessionInvalidatedRef.current) return;
+      if (lectureIdRef.current && msg.payload?.lectureId !== lectureIdRef.current) return;
       const data = msg.payload?.pdfData;
       if (data) {
         setPdfData(data);
@@ -68,6 +78,7 @@ function StudentLivePage() {
     if (msg.type === "PDF_PAGE") setCurrentPage(msg.payload?.page ?? 1);
 
     if (msg.type === "QUIZ_PUBLISHED") {
+      backendSetIdRef.current = null; // 새 세트마다 초기화
       setCounterRef.current += 1;
       const setIdx = setCounterRef.current;
       setActiveSet({
@@ -80,16 +91,6 @@ function StudentLivePage() {
       setChoices({});
       setSubmitted(false);
       setQuizClosed(false);
-    }
-
-    if (msg.type === "QUIZ_SET_BACKEND_ID") {
-      // 교수가 배포 후 백엔드에서 받은 실제 set_id를 전달 → 답안 제출 시 사용
-      setActiveSet((prev) => {
-        if (prev?.setId === msg.payload?.localSetId) {
-          return { ...prev, backendSetId: msg.payload.backendSetId };
-        }
-        return prev;
-      });
     }
 
     if (msg.type === "QUIZ_CLOSED") {
@@ -119,21 +120,53 @@ function StudentLivePage() {
           ...savedSetsRef.current.filter((s) => s.id !== set.setIdx),
           setData,
         ];
-        saveResultsToStorage(savedSetsRef.current);
+        saveResultsToStorage(`quizsync-liveresults-${liveWeekRef.current}`, savedSetsRef.current);
       }
     }
 
     if (msg.type === "CLASS_ENDED") setClassEnded(true);
+
+    // 교수 화면이 백엔드 set_id를 확인하면 학생 쪽 setId도 업데이트
+    if (msg.type === "QUIZ_SET_BACKEND_ID") {
+      backendSetIdRef.current = msg.payload.backendSetId; // 동기적으로 즉시 저장
+      setActiveSet((prev) => {
+        if (!prev || prev.setId !== msg.payload?.localSetId) return prev;
+        return { ...prev, setId: msg.payload.backendSetId };
+      });
+    }
+
+    if (msg.type === "COURSE_INFO") {
+      if (msg.payload?.week) { setLiveWeek(msg.payload.week); liveWeekRef.current = msg.payload.week; }
+      if (msg.payload?.courseName) setLiveCourseName(msg.payload.courseName);
+    }
+
+    // 교수가 새 강의를 생성했는데 내 lectureId와 다르면 → 이전 세션 잔존 상태 초기화
+    if (msg.type === "LECTURE_CHANGED") {
+      const newId = msg.payload?.lectureId;
+      if (newId && newId !== lectureIdRef.current) {
+        sessionInvalidatedRef.current = true; // 이후 PDF_LOADED 차단
+        setPdfData(null);
+        clearPdfCache();
+        setCurrentPage(1);
+        setActiveSet(null);
+        setChoices({});
+        setSubmitted(false);
+        setQuizClosed(false);
+        setClassEnded(false);
+      }
+    }
   }, []);
 
   const emit = useBroadcastChannel("quizsync-v2", handleMessage);
 
   // Ask teacher for current state; retry a few times for late joins
+  // lectureId를 함께 보내 → 이전 세션 TeacherLivePage 탭이 응답하지 못하도록 필터링
   useEffect(() => {
-    emit("STATE_REQUEST", {});
-    const t1 = setTimeout(() => emit("STATE_REQUEST", {}), 300);
-    const t2 = setTimeout(() => emit("STATE_REQUEST", {}), 1200);
-    const t3 = setTimeout(() => emit("STATE_REQUEST", {}), 3000);
+    const req = { lectureId };
+    emit("STATE_REQUEST", req);
+    const t1 = setTimeout(() => emit("STATE_REQUEST", req), 300);
+    const t2 = setTimeout(() => emit("STATE_REQUEST", req), 1200);
+    const t3 = setTimeout(() => emit("STATE_REQUEST", req), 3000);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, [emit]);
 
@@ -145,7 +178,8 @@ function StudentLivePage() {
 
   const handleSubmit = () => {
     if (!activeSet) return;
-    // 브로드캐스트 (기존 실시간 연동)
+
+    // BroadcastChannel — 실시간 동기화 (교수 화면 즉시 반영)
     activeSet.questions.forEach((q) => {
       emit("STUDENT_ANSWER", {
         setId: activeSet.setId,
@@ -153,49 +187,58 @@ function StudentLivePage() {
         choiceIdx: choices[q.id],
       });
     });
-    // 백엔드 답안 제출 — backendSetId가 있을 때만
-    if (lectureId && activeSet.backendSetId) {
-      submitAnswers(lectureId, activeSet.backendSetId, {
-        answers: activeSet.questions.map((q) => ({
-          quiz_id: q.id,
-          selected: q.choices[choices[q.id]] ?? "",
-        })),
-      }).catch((err) => console.error("답안 제출 실패:", err.message));
-    }
     setSubmitted(true);
+
+    // API — 백엔드 저장 (복습·리포트용)
+    // backendSetIdRef: QUIZ_SET_BACKEND_ID 수신 시 동기적으로 저장된 값 → React 배치 업데이트보다 빠름
+    const effectiveSetId = backendSetIdRef.current || activeSet.setId;
+    if (lectureId && effectiveSetId) {
+      // 백엔드는 selected를 "1"/"2"/"3"/"4" 형식의 1-based 번호로 받음
+      const answers = activeSet.questions.map((q) => ({
+        quiz_id: q.id,
+        selected: choices[q.id] !== undefined ? String(choices[q.id] + 1) : "",
+      }));
+      submitAnswers(lectureId, effectiveSetId, { answers }).catch((err) => {
+        console.error("답안 제출 API 오류:", err.message);
+      });
+    }
+
+    // localStorage 폴백 저장 — 복습 페이지에서 my_answer null일 때 사용
+    if (lectureId) {
+      try {
+        const key = `quizsync-myanswers-${lectureId}`;
+        const saved = JSON.parse(localStorage.getItem(key) || "{}");
+        activeSet.questions.forEach((q) => {
+          if (choices[q.id] !== undefined) {
+            saved[String(q.id)] = q.choices[choices[q.id]] ?? "";
+          }
+        });
+        localStorage.setItem(key, JSON.stringify(saved));
+      } catch {}
+    }
   };
 
   const handleMemoChange = (qid, text) => {
     setMemos((prev) => ({ ...prev, [qid]: text }));
-    saveMemoToStorage(qid, text);
-  };
-
-  // 메모 textarea에서 포커스가 벗어날 때 백엔드에 저장
-  // 최초 저장은 POST, 이후 수정은 PATCH
-  const handleMemoBlur = (qid, text) => {
-    if (!text.trim()) return;
-    if (memoSavedRef.current[qid]) {
-      updateMemo(qid, text).catch((err) => console.error("메모 수정 실패:", err.message));
-    } else {
-      createMemo(qid, text)
-        .then(() => { memoSavedRef.current[qid] = true; })
-        .catch((err) => console.error("메모 저장 실패:", err.message));
-    }
+    saveMemoToStorage(`quizsync-memo-${liveWeek}-${qid}`, text);
   };
 
   const handleSendQuestion = () => {
     const text = chatbotInput.trim();
     if (!text) return;
-    const question = { id: Date.now(), text, week: WEEK, time: "방금 전" };
+
+    // BroadcastChannel — 실시간 동기화 (교수 화면 즉시 반영)
+    const question = { id: Date.now(), text, week: liveWeek, time: "방금 전" };
     appendQuestionCache(question);
     emit("STUDENT_QUESTION", { question });
     setRecentQuestion(text);
     setChatbotInput("");
-    // 백엔드에 익명 질문 저장 (lectureId 있을 때만)
+
+    // API — 백엔드 저장 (리포트 익명 질문 목록용)
     if (lectureId) {
-      submitQuestion(lectureId, text).catch((err) =>
-        console.error("질문 제출 실패:", err.message)
-      );
+      submitQuestion(lectureId, text).catch((err) => {
+        console.error("질문 제출 API 오류:", err.message);
+      });
     }
   };
 
@@ -218,7 +261,7 @@ function StudentLivePage() {
         <div className="live-statusbar" style={{ marginBottom: 12 }}>
           <div className="left">
             <span className="pill pill-brand" style={{ fontSize: 12 }}>
-              자료구조론 {WEEK}주차
+              {liveCourseName} {liveWeek}주차
             </span>
             <span style={{ color: "var(--zinc-500)" }}>
               학번 <strong style={{ color: "var(--zinc-900)" }}>20231349 · 익명 응답</strong>
@@ -229,7 +272,7 @@ function StudentLivePage() {
             </span>
           </div>
           <div className="right">
-            <button className="btn btn-ghost btn-sm" type="button" onClick={() => navigate("/student/review")}>
+            <button className="btn btn-ghost btn-sm" type="button" onClick={() => navigate("/student/review", { state: { lectureId } })}>
               복습
             </button>
             <button className="btn btn-ghost btn-sm" type="button" onClick={() => navigate("/student/courses")}>
@@ -369,7 +412,6 @@ function StudentLivePage() {
                             placeholder="이 문제와 관련하여 메모를 남겨두세요..."
                             value={memos[q.id] || ""}
                             onChange={(e) => handleMemoChange(q.id, e.target.value)}
-                            onBlur={(e) => handleMemoBlur(q.id, e.target.value)}
                           />
                         </div>
                       </div>
@@ -465,7 +507,7 @@ function StudentLivePage() {
                 <button className="btn btn-ghost" type="button" style={{ flex: 1, whiteSpace: "nowrap" }} onClick={() => setClassEnded(false)}>
                   잠깐 더 머무르기
                 </button>
-                <button className="btn btn-primary" type="button" style={{ flex: 1, whiteSpace: "nowrap" }} onClick={() => navigate("/student/review")}>
+                <button className="btn btn-primary" type="button" style={{ flex: 1, whiteSpace: "nowrap" }} onClick={() => navigate("/student/review", { state: { lectureId } })}>
                   복습 페이지로 이동
                 </button>
               </div>

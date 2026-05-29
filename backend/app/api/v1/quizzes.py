@@ -25,6 +25,7 @@ from app.services.quiz.quiz_generation import (
     generate_quizzes_for_concepts,
     get_concept_label,
     infer_concept_label_from_source_sentence,
+    is_generation_quiz_type_enabled,
     prepare_quiz_materials_for_ai,
     serialize_options,
 )
@@ -409,6 +410,12 @@ def generate_lecture_quizzes(
     quiz_type_error = validate_quiz_type(quiz_type)
     if quiz_type_error:
         return quiz_type_error
+
+    if quiz_type != "MIXED" and not is_generation_quiz_type_enabled(quiz_type):
+        return error_response(
+            status.HTTP_400_BAD_REQUEST,
+            f"{quiz_type} quiz generation is currently disabled.",
+        )
 
     difficulty = normalize_difficulty(request_data.difficulty)
     difficulty_error = validate_difficulty(difficulty)
@@ -1397,6 +1404,12 @@ def regenerate_quiz(
     quiz_type_error = validate_quiz_type(quiz_type)
     if quiz_type_error:
         return quiz_type_error
+
+    if quiz_type != "MIXED" and not is_generation_quiz_type_enabled(quiz_type):
+        return error_response(
+            status.HTTP_400_BAD_REQUEST,
+            f"{quiz_type} quiz generation is currently disabled.",
+        )
 
     difficulty = normalize_difficulty(request_data.difficulty)
     difficulty_error = validate_difficulty(difficulty)
