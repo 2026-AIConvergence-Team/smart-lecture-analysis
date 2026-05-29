@@ -39,6 +39,7 @@ from app.constants.quiz_constants import (
     SLIDE_ARTIFACT_CHARS,
     SOURCE_FACT_MARKERS,
     SOURCE_LABEL_SEPARATORS,
+    SUBJECTIVE_GENERATION_ENABLED,
     TITLE_LIKE_SHORT_OPTION_MARKERS,
     UNSAFE_CONCEPT_LABEL_SUFFIXES,
     WEAK_BLANK_ANSWER_WORDS,
@@ -963,6 +964,21 @@ def canonicalize_generation_quiz_type(
 
     return default
 
+
+def get_enabled_generated_quiz_types() -> set[str]:
+    enabled_types = set(NEW_GENERATED_QUIZ_TYPES)
+
+    if not SUBJECTIVE_GENERATION_ENABLED:
+        enabled_types.discard("SUBJECTIVE")
+
+    return enabled_types
+
+
+def is_generation_quiz_type_enabled(quiz_type: str) -> bool:
+    canonical = canonicalize_generation_quiz_type(quiz_type)
+    return canonical in get_enabled_generated_quiz_types()
+
+
 def is_answer_exposed_in_question(
     quiz_type: str,
     question: str,
@@ -1002,10 +1018,11 @@ def get_default_mixed_quiz_types() -> List[str]:
     핵심어 선택형은 제거하고, 객관식/주관식/단답/OX를 섞습니다.
     """
     preferred = []
+    enabled_types = get_enabled_generated_quiz_types()
 
     for quiz_type in AI_PREFERRED_MIXED_QUIZ_TYPES:
         canonical = canonicalize_generation_quiz_type(quiz_type)
-        if canonical in NEW_GENERATED_QUIZ_TYPES:
+        if canonical in enabled_types:
             preferred.append(canonical)
 
     preferred = unique_keep_order(preferred)
@@ -1017,7 +1034,7 @@ def get_default_mixed_quiz_types() -> List[str]:
         "SHORT_ANSWER",
         "OX",
     ]:
-        if fallback_type not in preferred:
+        if fallback_type in enabled_types and fallback_type not in preferred:
             preferred.append(fallback_type)
 
     return preferred
@@ -1653,7 +1670,7 @@ def get_generation_types(quiz_type: str) -> List[str]:
 
     canonical = canonicalize_generation_quiz_type(normalized_quiz_type)
 
-    if canonical not in NEW_GENERATED_QUIZ_TYPES:
+    if canonical not in get_enabled_generated_quiz_types():
         return []
 
     return [canonical]
@@ -2152,6 +2169,9 @@ def get_low_quality_generated_quiz_reason(
 
     if quiz_type not in NEW_GENERATED_QUIZ_TYPES:
         return f"지원하지 않는 quiz_type입니다: {quiz_type}"
+
+    if quiz_type not in get_enabled_generated_quiz_types():
+        return f"quiz_type generation is currently disabled: {quiz_type}"
 
     if concept_name and not is_safe_concept_label(concept_name):
         return f"concept_name이 안전한 개념 라벨이 아닙니다: {concept_name}"
@@ -3097,10 +3117,13 @@ def choose_preferred_quiz_type(
     normalized = normalize_text_item(str(quiz_type or "")).upper()
 
     if normalized != "MIXED":
-        return canonicalize_generation_quiz_type(
+        selected_type = canonicalize_generation_quiz_type(
             normalized,
             default="MULTIPLE_CHOICE",
         )
+        if is_generation_quiz_type_enabled(selected_type):
+            return selected_type
+        return "MULTIPLE_CHOICE"
 
     preferred_types = get_default_mixed_quiz_types()
 
@@ -3342,4 +3365,3 @@ def prepare_quiz_materials_for_ai(
     )
 
     return selected_materials, failed_count
-
