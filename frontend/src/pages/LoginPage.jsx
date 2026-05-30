@@ -11,34 +11,71 @@ function LoginPage() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+
     if (!form.email || !form.password) {
       setMessage("이메일과 비밀번호를 모두 입력해 주세요.");
       return;
     }
+
     setMessage("");
     setLoading(true);
-    try {
-      // 1. 로그인 → access_token 받기
-      const tokenData = await login({ email: form.email, password: form.password });
-      localStorage.setItem("access_token", tokenData.access_token);
 
-      // 2. 내 정보 조회 → role 확인
-      const me = await getMe();
+    try {
+      // 이전 로그인 잔여 토큰 제거
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("teacher_access_token");
+      localStorage.removeItem("student_access_token");
+      localStorage.removeItem("user_role");
+      localStorage.removeItem("user_name");
+      localStorage.removeItem("user_email");
+
+      sessionStorage.removeItem("access_token");
+      sessionStorage.removeItem("user_role");
+
+      // 1. 로그인 → access_token 받기
+      const tokenData = await login({
+        email: form.email,
+        password: form.password,
+      });
+
+      const accessToken = tokenData.access_token;
+
+      if (!accessToken) {
+        throw new Error("로그인 토큰을 받지 못했습니다.");
+      }
+
+      // 2. getMe 전에 새 토큰을 sessionStorage/localStorage에 먼저 저장
+      localStorage.setItem("access_token", accessToken);
+      sessionStorage.setItem("access_token", accessToken);
+
+      // 3. 새 토큰으로 내 정보 조회
+      const me = await getMe(accessToken);
+
       localStorage.setItem("user_role", me.role);
       localStorage.setItem("user_name", me.name);
       localStorage.setItem("user_email", me.email);
-      // 역할별 토큰 분리 저장 (같은 브라우저에서 교수+학생 동시 테스트 지원)
-      localStorage.setItem(`${me.role}_access_token`, tokenData.access_token);
-      // 탭별 세션 저장 — 같은 브라우저에서 교수/학생 동시 로그인 시 토큰 충돌 방지
-      sessionStorage.setItem("access_token", tokenData.access_token);
+
+      // 역할별 토큰 분리 저장
+      localStorage.setItem(`${me.role}_access_token`, accessToken);
+
       sessionStorage.setItem("user_role", me.role);
 
-      // 3. role에 따라 페이지 이동
-      const destination = me.role === "teacher" ? "/teacher/courses" : "/student/courses";
+      const destination =
+        me.role === "teacher" ? "/teacher/courses" : "/student/courses";
+
       navigate(destination);
     } catch (err) {
       setMessage(err.message || "로그인에 실패했습니다. 이메일과 비밀번호를 확인해 주세요.");
+
       localStorage.removeItem("access_token");
+      localStorage.removeItem("teacher_access_token");
+      localStorage.removeItem("student_access_token");
+      localStorage.removeItem("user_role");
+      localStorage.removeItem("user_name");
+      localStorage.removeItem("user_email");
+
+      sessionStorage.removeItem("access_token");
+      sessionStorage.removeItem("user_role");
     } finally {
       setLoading(false);
     }

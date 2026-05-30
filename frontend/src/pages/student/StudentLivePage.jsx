@@ -3,9 +3,9 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { LogOut, MessageCircle, Send } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import PdfViewer from "../../components/PdfViewer.jsx";
-import useBroadcastChannel from "../../hooks/useBroadcastChannel.js";
+import useLectureRealtime from "../../hooks/useLectureRealtime.js";
 import { appendQuestionCache, clearPdfCache, setPdfCache } from "../../data/sessionCache.js";
-import { submitAnswers, submitQuestion } from "../../api/lectureApi.js";
+import { downloadLecturePdf, getLecture, getLectureQuizzes, submitAnswers, submitQuestion } from "../../api/lectureApi.js";
 
 function saveMemoToStorage(key, text) {
   try { localStorage.setItem(key, text); } catch {}
@@ -13,6 +13,35 @@ function saveMemoToStorage(key, text) {
 
 function saveResultsToStorage(key, sets) {
   try { localStorage.setItem(key, JSON.stringify(sets)); } catch {}
+}
+
+function getBackendAnswerIndex(quiz) {
+  const options = Array.isArray(quiz.options) ? quiz.options : [];
+  const index = options.findIndex((option) => String(option) === String(quiz.answer));
+  return index >= 0 ? index : 0;
+}
+
+function mapBackendQuizToLiveQuestion(quiz, index) {
+  return {
+    id: quiz.quiz_id,
+    n: index + 1,
+    keyword: quiz.concept || "개념",
+    question: quiz.question,
+    choices: Array.isArray(quiz.options) ? quiz.options : [],
+    answer: getBackendAnswerIndex(quiz),
+    explain: quiz.explanation || "",
+  };
+}
+
+function pickLatestVisibleQuizSet(sets) {
+  return [...sets]
+    .filter((set) => ["SENT", "CLOSED"].includes(String(set.status || "").toUpperCase()))
+    .filter((set) => Array.isArray(set.quizzes) && set.quizzes.length > 0)
+    .sort((a, b) => {
+      const left = Number(a.set_number ?? a.set_id ?? 0);
+      const right = Number(b.set_number ?? b.set_id ?? 0);
+      return right - left;
+    })[0] || null;
 }
 
 function StudentLivePage() {
@@ -39,6 +68,7 @@ function StudentLivePage() {
   // Refs for reading current state inside memoized callbacks
   const activeSetRef = useRef(null);
   const choicesRef = useRef({});
+  const quizClosedRef = useRef(false);
   const savedSetsRef = useRef([]); // accumulates closed sets for review
   const setCounterRef = useRef(0);
   // LECTURE_CHANGED 수신 시 true → 이후 PDF_LOADED 무시 (이전 세션 탭 오염 방지)
@@ -46,6 +76,7 @@ function StudentLivePage() {
 
   useEffect(() => { activeSetRef.current = activeSet; }, [activeSet]);
   useEffect(() => { choicesRef.current = choices; }, [choices]);
+  useEffect(() => { quizClosedRef.current = quizClosed; }, [quizClosed]);
   useEffect(() => { liveWeekRef.current = liveWeek; }, [liveWeek]);
 
   useEffect(() => {
@@ -64,13 +95,33 @@ function StudentLivePage() {
 
   const handleMessage = useCallback((msg) => {
     if (msg.type === "PDF_LOADED") {
-      // 세션이 무효화된 경우(LECTURE_CHANGED 수신 후) 이전 탭의 PDF를 차단
       if (sessionInvalidatedRef.current) return;
       if (lectureIdRef.current && msg.payload?.lectureId !== lectureIdRef.current) return;
+
       const data = msg.payload?.pdfData;
+
       if (data) {
         setPdfData(data);
         setPdfCache(data, msg.payload?.pdfFileName || null, msg.payload?.pdfTotal || 0);
+        return;
+      }
+
+      // WebSocket으로는 PDF 바이너리를 보내지 않으므로,
+      // PDF_LOADED 메타데이터를 받으면 학생이 직접 API로 PDF를 다운로드한다.
+      if (lectureIdRef.current && msg.payload?.pdfFileName) {
+        downloadLecturePdf(lectureIdRef.current)
+          .then((buffer) => {
+            const bytes = new Uint8Array(buffer);
+            setPdfData(bytes);
+            setPdfCache(
+              bytes,
+              msg.payload?.pdfFileName || null,
+              msg.payload?.pdfTotal || 0
+            );
+          })
+          .catch((err) => {
+            console.error("실시간 PDF 다운로드 실패:", err.message);
+          });
       }
     }
     if (msg.type === "PDF_PAGE") setCurrentPage(msg.payload?.page ?? 1);
@@ -153,7 +204,7 @@ function StudentLivePage() {
     }
   }, []);
 
-  const emit = useBroadcastChannel("quizsync-v2", handleMessage);
+  const emit = useLectureRealtime("quizsync-v2", lectureId, handleMessage);
 
   // Ask teacher for current state; retry a few times for late joins
   // lectureId를 함께 보내 → 이전 세션 TeacherLivePage 탭이 응답하지 못하도록 필터링
@@ -165,6 +216,71 @@ function StudentLivePage() {
     const t3 = setTimeout(() => emit("STATE_REQUEST", req), 3000);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, [emit]);
+
+  useEffect(() => {
+    if (!lectureId || pdfData) return;
+
+    getLecture(lectureId)
+      .then((lecture) => {
+        if (lecture?.status === "ENDED") setClassEnded(true);
+        if (lecture?.title) setLiveCourseName(lecture.title);
+        if (!lecture?.file_name) return null;
+
+        return downloadLecturePdf(lectureId).then((buffer) => {
+          const bytes = new Uint8Array(buffer);
+          setPdfData(bytes);
+          setPdfCache(bytes, lecture.file_name, lecture.total_pages || 0);
+        });
+      })
+      .catch((err) => console.error("강의 자료 로드 실패:", err.message));
+  }, [lectureId, pdfData]);
+
+  const syncVisibleQuizSet = useCallback(() => {
+    if (!lectureId) return Promise.resolve();
+
+    return getLectureQuizzes(lectureId)
+      .then((res) => {
+        const latestSet = pickLatestVisibleQuizSet(res?.sets || []);
+        if (!latestSet) return;
+
+        const isClosed = String(latestSet.status || "").toUpperCase() === "CLOSED";
+        const currentSet = activeSetRef.current;
+        const currentSetId = currentSet?.setId == null ? null : Number(currentSet.setId);
+        const latestSetId = Number(latestSet.set_id);
+
+        if (currentSet && currentSetId === latestSetId) {
+          if (isClosed && !quizClosedRef.current) {
+            setQuizClosed(true);
+          }
+          return;
+        }
+
+        const questions = latestSet.quizzes.map(mapBackendQuizToLiveQuestion);
+
+        setCounterRef.current = Math.max(setCounterRef.current, Number(latestSet.set_number || 1));
+        setActiveSet({
+          setId: latestSet.set_id,
+          setIdx: latestSet.set_number || 1,
+          questions,
+          startPage: latestSet.page_start || 1,
+          pdfRange: latestSet.page_start === latestSet.page_end
+            ? `p.${latestSet.page_start}`
+            : `p.${latestSet.page_start}-${latestSet.page_end}`,
+        });
+        setChoices({});
+        setSubmitted(false);
+        setQuizClosed(isClosed);
+      })
+      .catch((err) => console.error("출제된 퀴즈 동기화 실패:", err.message));
+  }, [lectureId]);
+
+  useEffect(() => {
+    if (!lectureId) return undefined;
+
+    syncVisibleQuizSet();
+    const timer = setInterval(syncVisibleQuizSet, 3000);
+    return () => clearInterval(timer);
+  }, [lectureId, syncVisibleQuizSet]);
 
   const handleChoiceSelect = (qid, idx) => {
     if (!submitted && !quizClosed) {
@@ -259,10 +375,6 @@ function StudentLivePage() {
             </span>
             <span style={{ color: "var(--zinc-500)" }}>
               학번 <strong style={{ color: "var(--zinc-900)" }}>20231349 · 익명 응답</strong>
-            </span>
-            <span className="live-pill">
-              <span className="dot" />
-              실시간 연동
             </span>
           </div>
           <div className="right">

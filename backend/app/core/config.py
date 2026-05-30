@@ -1,12 +1,17 @@
-from typing import Optional
 import json
+from pathlib import Path
+from typing import Optional
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+DEFAULT_DATABASE_URL = f"sqlite:///{(BACKEND_DIR / 'app.db').as_posix()}"
+
+
 class Settings(BaseSettings):
-    DATABASE_URL: str = "sqlite:///./app.db"
+    DATABASE_URL: str = DEFAULT_DATABASE_URL
     SECRET_KEY: str = "change-this-secret-key-for-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
