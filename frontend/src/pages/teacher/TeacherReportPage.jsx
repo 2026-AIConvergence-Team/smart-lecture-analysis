@@ -17,6 +17,11 @@ function getColorKey(score) {
   return "danger";
 }
 
+function cleanConceptName(name) {
+  return (name || "").replace(/\s*\(\d+\)\s*$/, "").trim();
+}
+
+
 function TeacherReportPage() {
   const location = useLocation();
   const locationLectureId = location.state?.lectureId ? Number(location.state.lectureId) : null;
@@ -101,7 +106,7 @@ function TeacherReportPage() {
   const activeCourse = courses.find((c) => c.id === activeCourseId);
   const sets = report?.sets || [];
   const activeSet = sets[activeSetIdx] || null;
-  const weakConcepts = (report?.concept_stats || []).filter((c) => c.is_weak).map((c) => c.concept);
+  const weakConcepts = (report?.concept_stats || []).filter((c) => c.is_weak).map((c) => cleanConceptName(c.concept));
 
   return (
     <RoleLayout role="teacher" title="수업 리포트">
@@ -251,7 +256,7 @@ function TeacherReportPage() {
                     const colorKey = getColorKey(c.avg_correct_rate);
                     return (
                       <div key={c.concept} className="concept-row">
-                        <div className="lbl">{c.concept}</div>
+                        <div className="lbl">{cleanConceptName(c.concept)}</div>
                         <div className="bar">
                           <div style={{ width: `${c.avg_correct_rate}%`, background: COLOR_VAR[colorKey].bar }} />
                         </div>

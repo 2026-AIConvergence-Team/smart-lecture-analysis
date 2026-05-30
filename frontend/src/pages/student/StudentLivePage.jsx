@@ -41,6 +41,8 @@ function StudentLivePage() {
   const choicesRef = useRef({});
   const savedSetsRef = useRef([]); // accumulates closed sets for review
   const setCounterRef = useRef(0);
+  // QUIZ_SET_BACKEND_ID 수신 시 즉시(동기) 저장 → handleSubmit race condition 방지
+  const backendSetIdRef = useRef(null);
   // LECTURE_CHANGED 수신 시 true → 이후 PDF_LOADED 무시 (이전 세션 탭 오염 방지)
   const sessionInvalidatedRef = useRef(false);
 
@@ -76,6 +78,7 @@ function StudentLivePage() {
     if (msg.type === "PDF_PAGE") setCurrentPage(msg.payload?.page ?? 1);
 
     if (msg.type === "QUIZ_PUBLISHED") {
+      backendSetIdRef.current = null; // 새 세트마다 초기화
       setCounterRef.current += 1;
       const setIdx = setCounterRef.current;
       setActiveSet({
@@ -125,6 +128,7 @@ function StudentLivePage() {
 
     // 교수 화면이 백엔드 set_id를 확인하면 학생 쪽 setId도 업데이트
     if (msg.type === "QUIZ_SET_BACKEND_ID") {
+      backendSetIdRef.current = msg.payload.backendSetId; // 동기적으로 즉시 저장
       setActiveSet((prev) => {
         if (!prev || prev.setId !== msg.payload?.localSetId) return prev;
         return { ...prev, setId: msg.payload.backendSetId };
@@ -186,13 +190,15 @@ function StudentLivePage() {
     setSubmitted(true);
 
     // API — 백엔드 저장 (복습·리포트용)
-    if (lectureId && activeSet.setId) {
+    // backendSetIdRef: QUIZ_SET_BACKEND_ID 수신 시 동기적으로 저장된 값 → React 배치 업데이트보다 빠름
+    const effectiveSetId = backendSetIdRef.current || activeSet.setId;
+    if (lectureId && effectiveSetId) {
       // 백엔드는 selected를 "1"/"2"/"3"/"4" 형식의 1-based 번호로 받음
       const answers = activeSet.questions.map((q) => ({
         quiz_id: q.id,
         selected: choices[q.id] !== undefined ? String(choices[q.id] + 1) : "",
       }));
-      submitAnswers(lectureId, activeSet.setId, { answers }).catch((err) => {
+      submitAnswers(lectureId, effectiveSetId, { answers }).catch((err) => {
         console.error("답안 제출 API 오류:", err.message);
       });
     }

@@ -632,7 +632,7 @@ function TeacherLivePage() {
     // 배포 시 모든 퀴즈 상태를 READY로 변경 (updateQuizStatus)
     if (lectureId) {
       quizDraft.forEach((q) =>
-        updateQuizStatus(q.setId, q.id, "READY").catch((err) =>
+        updateQuizStatus(q.setId, q.id, "SENT").catch((err) =>
           console.error("상태 변경 실패:", err.message)
         )
       );
@@ -673,6 +673,8 @@ function TeacherLivePage() {
               s.id === id && !s.setId ? { ...s, setId: latest.set_id } : s
             )
           );
+          // 퀴즈 세트 상태를 SENT로 변경해야 학생이 답안 제출 가능
+          updateQuizSetStatus(latest.set_id, "SENT").catch(() => {});
           // 학생 화면에서 답안 제출 시 실제 백엔드 set_id가 필요하므로 별도 브로드캐스트
           emit("QUIZ_SET_BACKEND_ID", { localSetId: id, backendSetId: latest.set_id });
         })
