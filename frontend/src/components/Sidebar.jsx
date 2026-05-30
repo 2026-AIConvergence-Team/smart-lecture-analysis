@@ -40,14 +40,14 @@ function Sidebar({ role = "teacher" }) {
 
         {role === "student" && (
           <div>
-            <div className="label">내 수업</div>
+            <div className="label">My Courses</div>
             <button
               className={`nav-btn ${isActive("/student/courses") ? "active" : ""}`}
               type="button"
               onClick={() => navigate("/student/courses")}
             >
               <Library className="ico" size={16} />
-              수업 목록
+              My Courses
             </button>
             <button
               className={`nav-btn ${isActive("/student/review") ? "active" : ""}`}

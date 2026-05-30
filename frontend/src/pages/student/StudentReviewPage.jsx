@@ -1,17 +1,19 @@
 import { useState, useEffect, useRef } from "react";
 import { ChevronLeft, ChevronRight, FileText } from "lucide-react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import PdfViewer from "../../components/PdfViewer.jsx";
-import { getPdfCache } from "../../data/sessionCache.js";
+import { getPdfCache, setPdfCache } from "../../data/sessionCache.js";
 import { getCourses, getCourseLectures } from "../../api/courseApi.js";
-import { getLectureReview, createMemo, updateMemo } from "../../api/lectureApi.js";
+import { getLectureReview, createMemo, updateMemo, downloadLecturePdf } from "../../api/lectureApi.js";
 
 function StudentReviewPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const pdfCache = getPdfCache();
   // 수업 직후 이동 시 전달받는 lectureId (자동 선택용)
   const locationLectureId = location.state?.lectureId ? Number(location.state.lectureId) : null;
+  const [directLectureId, setDirectLectureId] = useState(locationLectureId);
 
   const [courses, setCourses] = useState([]);
   const [lecturesByCourse, setLecturesByCourse] = useState({});
@@ -30,7 +32,8 @@ function StudentReviewPage() {
   const memoStateRef = useRef({});
 
   const [pdfPage, setPdfPage] = useState(1);
-  const [pdfData] = useState(() => pdfCache.pdfData);
+  const [pdfData, setPdfData] = useState(() => pdfCache.pdfData);
+  const [pdfTotal, setPdfTotal] = useState(() => pdfCache.pdfTotal || 0);
 
   // 강의 목록 초기 로드
   useEffect(() => {
@@ -67,27 +70,9 @@ function StudentReviewPage() {
       .finally(() => setCoursesLoading(false));
   }, []);
 
-  const handleCourseChange = async (courseId) => {
-    const numId = Number(courseId);
-    setActiveCourseId(numId);
-    setReview(null);
-    setReviewError("");
-    setActiveSetIdx(0);
-    setFilterMode("all");
-    setMemos({});
-    if (!lecturesByCourse[numId]) {
-      const lectures = await getCourseLectures(numId).catch(() => []);
-      setLecturesByCourse((prev) => ({ ...prev, [numId]: lectures }));
-      setActiveLectureIdx(lectures.length > 0 ? lectures.length - 1 : 0);
-    } else {
-      const lectures = lecturesByCourse[numId] || [];
-      setActiveLectureIdx(lectures.length > 0 ? lectures.length - 1 : 0);
-    }
-  };
-
   const activeLectures = (activeCourseId ? lecturesByCourse[activeCourseId] : null) || [];
   const activeLecture = activeLectures[activeLectureIdx] || null;
-  const activeLectureId = activeLecture?.id ?? activeLecture?.lecture_id ?? null;
+  const activeLectureId = directLectureId ?? activeLecture?.id ?? activeLecture?.lecture_id ?? null;
 
   // 수업 변경 시 복습 로드
   useEffect(() => {
@@ -165,6 +150,30 @@ function StudentReviewPage() {
       .finally(() => setReviewLoading(false));
   }, [activeLectureId]);
 
+  useEffect(() => {
+    if (!activeLectureId) return;
+
+    let cancelled = false;
+    setPdfPage(1);
+    setPdfData(null);
+    setPdfTotal(0);
+
+    downloadLecturePdf(activeLectureId)
+      .then((buffer) => {
+        if (cancelled) return;
+        const bytes = new Uint8Array(buffer);
+        setPdfData(bytes);
+        setPdfCache(bytes, null, 0);
+      })
+      .catch((err) => {
+        if (!cancelled) console.error("복습 PDF 로드 실패:", err.message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeLectureId]);
+
   // 메모 변경 핸들러 (blur 시 서버 저장)
   const handleMemoChange = (quizId, text) => {
     setMemos((prev) => ({ ...prev, [quizId]: text }));
@@ -194,9 +203,9 @@ function StudentReviewPage() {
     if (!activeSet) return [];
     let list = activeSet.quizzes;
     if (filterMode === "wrong") {
-      list = list.filter((q) => !q.is_correct);
+      list = list.filter((q) => q.is_correct === false);
     } else if (filterMode === "hot") {
-      list = [...list].sort((a, b) => b.class_wrong_rate - a.class_wrong_rate);
+      list = [...list].sort((a, b) => Number(b.class_wrong_rate || 0) - Number(a.class_wrong_rate || 0));
     }
     return list;
   })();
@@ -215,17 +224,11 @@ function StudentReviewPage() {
 
             {/* 헤더 */}
             <div className="review-eyebrow-row">
+              <button className="review-back-button" type="button" onClick={() => navigate("/student/courses")}>
+                <ChevronLeft size={15} />
+                수업 목록
+              </button>
               <p className="eyebrow">My Review</p>
-              <label className="review-course-picker">
-                <span>강의</span>
-                <select value={activeCourseId || ""} onChange={(e) => handleCourseChange(e.target.value)}>
-                  {courses.map((course) => (
-                    <option key={course.id} value={course.id}>
-                      {course.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
             </div>
 
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18, marginTop: 8 }}>
@@ -242,7 +245,7 @@ function StudentReviewPage() {
                 <button
                   className="btn-arrow"
                   type="button"
-                  onClick={() => { setActiveLectureIdx((i) => Math.max(0, i - 1)); setReview(null); setReviewError(""); setActiveSetIdx(0); setFilterMode("all"); }}
+                  onClick={() => { setDirectLectureId(null); setActiveLectureIdx((i) => Math.max(0, i - 1)); setReview(null); setReviewError(""); setActiveSetIdx(0); setFilterMode("all"); }}
                   disabled={activeLectureIdx <= 0}
                 >
                   <ChevronLeft size={16} />
@@ -254,7 +257,7 @@ function StudentReviewPage() {
                 <button
                   className="btn-arrow"
                   type="button"
-                  onClick={() => { setActiveLectureIdx((i) => Math.min(activeLectures.length - 1, i + 1)); setReview(null); setReviewError(""); setActiveSetIdx(0); setFilterMode("all"); }}
+                  onClick={() => { setDirectLectureId(null); setActiveLectureIdx((i) => Math.min(activeLectures.length - 1, i + 1)); setReview(null); setReviewError(""); setActiveSetIdx(0); setFilterMode("all"); }}
                   disabled={activeLectureIdx >= activeLectures.length - 1}
                 >
                   <ChevronRight size={16} />
@@ -448,7 +451,8 @@ function StudentReviewPage() {
               pdfData={pdfData}
               currentPage={pdfPage}
               onPageChange={setPdfPage}
-              initialTotalPages={pdfCache.pdfTotal || 0}
+              onTotalPagesChange={setPdfTotal}
+              initialTotalPages={pdfTotal}
               role="student"
               variant="review"
             />

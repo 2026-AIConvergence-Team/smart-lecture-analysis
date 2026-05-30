@@ -6,7 +6,9 @@ import {
   ChevronLeft,
   Clock,
   FileText,
+  GraduationCap,
   KeyRound,
+  Layers3,
   LogIn,
   Play,
   Radio,
@@ -320,24 +322,34 @@ function StudentCoursesPage() {
   const renderCourseCard = (course) => {
     const lectures = lecturesByCourse[course.id] || course.lectures || [];
     const summary = getCourseLectureSummary(lectures);
+    const courseInitial = String(course.title || "강의").trim().slice(0, 1);
+    const actionLabel = summary.activeCount > 0 ? "진행 중" : summary.endedCount === summary.total && summary.total > 0 ? "복습" : "열어보기";
 
     return (
-      <button key={course.id} className="course-card" type="button" onClick={() => handleCourseClick(course)}>
-        <div>
+      <button key={course.id} className="course-card student-course-card" type="button" onClick={() => handleCourseClick(course)}>
+        <div className="student-course-card-top">
+          <div className="student-course-icon" aria-hidden="true">{courseInitial}</div>
+          <span className="student-course-status pill pill-success">
+            <BookOpen size={13} />
+            수강 중
+          </span>
+        </div>
+
+        <div className="student-course-card-body">
           <div className="title">{course.title}</div>
           <div className="term">{getCourseMeta(course) || "과목 정보 없음"}</div>
         </div>
-        <span className="status-tag pill pill-success">
-          <BookOpen size={13} />
-          수강 중
-        </span>
-        <div className="meta">
-          <span className="key">
-            {course.section}분반 · {summary.total}개 수업
+
+        <div className="meta student-course-card-meta">
+          <span>
+            <GraduationCap size={14} />
+            {course.section}분반
           </span>
-          <span style={{ color: "var(--brand-deep)", fontWeight: 600 }}>
-            {summary.activeCount > 0 ? "진행 중" : summary.endedCount === summary.total && summary.total > 0 ? "복습" : "보기"}
+          <span>
+            <Layers3 size={14} />
+            {summary.total}개 수업
           </span>
+          <strong>{actionLabel}</strong>
         </div>
       </button>
     );
@@ -350,15 +362,18 @@ function StudentCoursesPage() {
     const lectureNo = getLectureNumber(lecture, index);
 
     return (
-      <article className={`lecture-card ${status}`} key={getLectureId(lecture) || `${lecture.title}-${index}`}>
+      <article className={`lecture-card student-lecture-card ${status}`} key={getLectureId(lecture) || `${lecture.title}-${index}`}>
         <div className="lecture-card-top">
-          <div className="lecture-number">{lectureNo}</div>
+          <div className="lecture-number">
+            <span>{lectureNo}</span>
+          </div>
           <span className={`pill ${view.pill}`}>
             <StatusIcon size={13} />
             {view.label}
           </span>
         </div>
         <div className="lecture-card-body">
+          <p className="lecture-card-label">수업 {lectureNo}</p>
           <h2>{lecture.title || `${lectureNo}번째 수업`}</h2>
           <div className="lecture-meta-list">
             <span>
@@ -389,8 +404,7 @@ function StudentCoursesPage() {
       <section className="content lecture-list-page">
         <div className="lecture-list-header">
           <div>
-            <p className="eyebrow">{activeCourse ? "My Lectures" : "My Courses"}</p>
-            <h1 className="page-title">{activeCourse ? `${activeCourse.title} 수업 목록` : "수강 중인 과목"}</h1>
+            <h1 className="page-title brand-title">{activeCourse ? "My Lectures" : "My Courses"}</h1>
             <p className="page-sub">
               {activeCourse
                 ? "참여한 수업을 열고 진행 중인 퀴즈와 복습 자료를 확인하세요."

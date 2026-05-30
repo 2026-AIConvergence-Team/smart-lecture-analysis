@@ -1,42 +1,65 @@
-import { ArrowLeft, LogOut } from "lucide-react";
+import { LogOut, UserRound } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { logout } from "../api/authApi.js";
+import linkOnLogo from "../assets/linkON_logo.svg";
 
-function Topbar() {
+const ROUTE_COPY = {
+  "/teacher/courses": {
+    title: "Course Dashboard",
+    crumb: ["Course Dashboard"],
+  },
+  "/teacher/week-select": {
+    title: "Course Dashboard",
+    crumb: ["Course Dashboard", "Lecture Select"],
+  },
+  "/teacher/setup": {
+    title: "Class Setup",
+    crumb: ["Course Dashboard", "Class Setup"],
+  },
+  "/teacher/live": {
+    title: "Live Class",
+    crumb: ["Course Dashboard", "Live"],
+    live: true,
+  },
+  "/teacher/report": {
+    title: "수업 리포트",
+    crumb: ["리포트"],
+  },
+  "/student/courses": {
+    title: "My Courses",
+    crumb: ["My Courses"],
+  },
+  "/student/live": {
+    title: "수업 참여",
+    crumb: ["My Courses", "Live"],
+    live: true,
+  },
+  "/student/review": {
+    title: "복습",
+    crumb: ["복습"],
+  },
+};
+
+function getRouteInfo(pathname) {
+  const matchedPath = Object.keys(ROUTE_COPY).find((path) => pathname.startsWith(path));
+  return ROUTE_COPY[matchedPath] || ROUTE_COPY["/teacher/courses"];
+}
+
+function getUserInitial(role) {
+  const fallback = role === "student" ? "S" : "T";
+  return (localStorage.getItem("user_name") || fallback).trim().slice(0, 1).toUpperCase();
+}
+
+function getUserLabel(role) {
+  return localStorage.getItem("user_name") || (role === "student" ? "학생" : "교수");
+}
+
+function Topbar({ role = "teacher" }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const routeInfo = getRouteInfo(location.pathname);
 
-  const getPageTitle = () => {
-    const path = location.pathname;
-    if (path.includes("/teacher/courses")) return "강의 목록";
-    if (path.includes("/teacher/setup")) return "강의 설정";
-    if (path.includes("/teacher/live")) return "수업 진행";
-    if (path.includes("/teacher/report")) return "수업 리포트";
-    if (path.includes("/student/courses")) return "수업 목록";
-    if (path.includes("/student/live")) return "수업 참여";
-    if (path.includes("/student/review")) return "복습";
-    return "강의 목록";
-  };
-
-  const handleBack = () => {
-    if (location.pathname.includes("/teacher/live")) {
-      const state = location.state || {};
-      navigate(state.courseId ? "/teacher/week-select" : "/teacher/courses", {
-        replace: true,
-        state: {
-          courseId: state.courseId,
-          courseName: state.courseName,
-          section: state.section,
-          students: state.students,
-          courseMeta: state.courseMeta,
-          currentWeek: state.week,
-        },
-      });
-      return;
-    }
-
-    navigate(-1);
-  };
+  const isTeacher = role === "teacher";
 
   const handleLogout = async () => {
     try {
@@ -54,30 +77,41 @@ function Topbar() {
     }
   };
 
-  const showBackBtn = !location.pathname.includes("/courses") || location.pathname.includes("/setup");
-
   return (
     <header className="topbar">
-      <div className="crumbs">
-        {showBackBtn && (
+      <div className="topbar-inner">
+        <div className="topbar-left">
           <button
-            className="btn btn-ghost btn-sm"
-            style={{ padding: "0 10px", height: "30px" }}
-            title="뒤로 가기"
+            className="topbar-brand"
             type="button"
-            onClick={handleBack}
+            aria-label="강의 목록으로 이동"
+            onClick={() => navigate(isTeacher ? "/teacher/courses" : "/student/courses")}
           >
-            <ArrowLeft size={14} /> 뒤로
+            <img src={linkOnLogo} alt="linkON" />
           </button>
-        )}
-        <span style={{ fontSize: "13px", color: "var(--zinc-500)" }}>
-          <strong style={{ color: "var(--zinc-900)" }}>{getPageTitle()}</strong>
-        </span>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
-        <button className="btn btn-ghost btn-sm" title="로그아웃" type="button" onClick={handleLogout}>
-          <LogOut size={14} /> 로그아웃
-        </button>
+
+          <span className="sr-only">{routeInfo.title}</span>
+        </div>
+
+        <div className="topbar-actions">
+          {routeInfo.live && (
+            <span className="live-pill">
+              <span className="dot" />
+              라이브
+            </span>
+          )}
+          <div className="topbar-user" title={getUserLabel(role)}>
+            <span className="topbar-avatar">{getUserInitial(role)}</span>
+            <span className="topbar-user-text">
+              <UserRound size={13} />
+              {getUserLabel(role)}
+            </span>
+          </div>
+          <button className="btn btn-ghost btn-sm topbar-logout" type="button" onClick={handleLogout}>
+            <LogOut size={14} />
+            로그아웃
+          </button>
+        </div>
       </div>
     </header>
   );
