@@ -1,11 +1,13 @@
 import re
 
-from sklearn.feature_extraction.text import TfidfVectorizer
 
+from sklearn.feature_extraction.text import TfidfVectorizer
+from kiwipiepy import Kiwi
 from app.constants.lecture_constants import HEADER_PATTERNS, STOPWORDS
 
 # 문장 병합 시 최대 길이 제한
 MAX_SENTENCE_LENGTH = 150
+kiwi = Kiwi()
 
 
 def remove_headers(text: str) -> str:
@@ -24,20 +26,19 @@ def remove_headers(text: str) -> str:
 
 
 def extract_pure_tokens(text: str) -> str:
-    """TF-IDF용 토크나이징"""
+    """TF-IDF용 토크나이징 — kiwipiepy 형태소 분석 기반"""
     text = remove_headers(text)
-    words = re.findall(r'[가-힣]{2,}|[a-zA-Z]{3,}', text)
 
-    cleaned_words = []
-    for word in words:
-        # 조사 제거
-        word = re.sub(r'(은|는|이|가|을|를|에|의|로|으로|과|와|에서|들|면|서|고|락)$', '', word)
-        # 동사/형용사 어미 제거
-        word = re.sub(r'(하|되|한|된|용|적|았|었|겠|며|니|하게|되게)$', '', word)
-        if len(word) >= 2 and word not in STOPWORDS:
-            cleaned_words.append(word)
+    result = kiwi.analyze(text)[0][0]
+    nouns = [
+        token.form
+        for token in result
+        if token.tag in ('NNG', 'NNP')  
+        and len(token.form) >= 2
+        and token.form not in STOPWORDS
+    ]
 
-    return ' '.join(cleaned_words)
+    return ' '.join(nouns)
 
 
 def _remove_substring_duplicates(keywords: list[str]) -> list[str]:
