@@ -1,6 +1,5 @@
 import re
 
-
 from sklearn.feature_extraction.text import TfidfVectorizer
 from kiwipiepy import Kiwi
 from app.constants.lecture_constants import HEADER_PATTERNS, STOPWORDS
@@ -33,7 +32,7 @@ def extract_pure_tokens(text: str) -> str:
     nouns = [
         token.form
         for token in result
-        if token.tag in ('NNG', 'NNP')  
+        if token.tag in ('NNG', 'NNP')
         and len(token.form) >= 2
         and token.form not in STOPWORDS
     ]
@@ -57,11 +56,13 @@ def extract_keywords_tfidf(
     text: str,
     all_texts: list[str],
     top_n: int = 10,
+    page_title: str = "",
 ) -> list[str]:
     """
     TF-IDF 기반 키워드 추출.
     text: 현재 페이지 텍스트
     all_texts: 전체 페이지 텍스트 리스트 (IDF 계산용)
+    page_title: 페이지 제목 (제목 등장 단어에 가중치 부여)
     """
     tokenized = [extract_pure_tokens(t) for t in all_texts]
     current_tokenized = extract_pure_tokens(text)
@@ -71,8 +72,8 @@ def extract_keywords_tfidf(
 
     try:
         vectorizer = TfidfVectorizer(
-            ngram_range=(1, 2),
-            max_df=0.5,
+            ngram_range=(1, 1),  # 단일어만 사용 — 2-gram 조합 노이즈 제거
+            max_df=0.85,
             min_df=1,
             token_pattern=r'[가-힣a-zA-Z]{2,}'
         )
@@ -82,8 +83,18 @@ def extract_keywords_tfidf(
         current_idx = tokenized.index(current_tokenized) if current_tokenized in tokenized else 0
         scores = tfidf_matrix[current_idx].toarray()[0]
 
-        # top_n보다 더 많이 뽑은 후 중복 제거
-        top_indices = scores.argsort()[::-1][:top_n * 2]
+        # 제목 가중치 반영
+        title_tokens = extract_pure_tokens(page_title).split() if page_title else []
+        boosted_scores = []
+        for idx, score in enumerate(scores):
+            kw = feature_names[idx]
+            if any(token in kw for token in title_tokens):
+                boosted_scores.append((idx, score * 1.5))
+            else:
+                boosted_scores.append((idx, score))
+
+        boosted_scores.sort(key=lambda x: x[1], reverse=True)
+        top_indices = [idx for idx, _ in boosted_scores[:top_n * 2]]
         keywords = [feature_names[idx] for idx in top_indices if scores[idx] > 0]
 
         # 부분 문자열 중복 제거
