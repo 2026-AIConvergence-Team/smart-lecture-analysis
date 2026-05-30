@@ -1,4 +1,4 @@
-const BASE = "";
+const BASE = import.meta.env.VITE_API_BASE_URL || "";
 
 function getToken() {
   const path = window.location.pathname;
@@ -51,7 +51,7 @@ export function uploadPdf(lectureId, file) {
   const formData = new FormData();
   formData.append("file", file);
 
-  return fetch(`/api/lectures/${lectureId}/pdf`, {
+  return fetch(`${BASE}/api/lectures/${lectureId}/pdf`, {
     method: "POST",
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),

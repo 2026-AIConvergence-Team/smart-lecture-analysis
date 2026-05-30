@@ -1,4 +1,4 @@
-const BASE = "";
+const BASE = import.meta.env.VITE_API_BASE_URL || "";
 
 function getToken() {
   const path = window.location.pathname;

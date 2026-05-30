@@ -1,4 +1,4 @@
-const API_BASE_URL = "";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
 async function request(path, options = {}) {
   // sessionStorage 우선 — 같은 브라우저에서 교수/학생 탭이 동시에 열릴 때 탭별 토큰 사용
