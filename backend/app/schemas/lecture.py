@@ -24,6 +24,10 @@ class LectureResponse(BaseModel):
     time: time
     class_code: Optional[str] = None
     status: str
+    file_name: Optional[str] = None
+    pdf_url: Optional[str] = None
+    total_pages: int = 0
+    participant_count: int = 0
     created_at: datetime
 
 

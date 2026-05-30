@@ -1,5 +1,6 @@
 import { Library, BarChart3, BookMarked } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
+import linkOnLogo from "../assets/linkON_logo.svg";
 
 function Sidebar({ role = "teacher" }) {
   const navigate = useNavigate();
@@ -10,11 +11,7 @@ function Sidebar({ role = "teacher" }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-head">
-        <div className="logo">Q</div>
-        <div>
-          <div className="wordmark">QuizSync</div>
-          <div className="wordmark-sub">수업 이해도 체크</div>
-        </div>
+        <img className="sidebar-logo-img" src={linkOnLogo} alt="linkON" />
       </div>
 
       <div className="sidebar-section">

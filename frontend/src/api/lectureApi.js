@@ -65,6 +65,23 @@ export function uploadPdf(lectureId, file) {
   });
 }
 
+// GET /api/lectures/{lecture_id}/pdf
+export async function downloadLecturePdf(lectureId) {
+  const token = getToken();
+  const response = await fetch(`${BASE}/api/lectures/${lectureId}/pdf`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.error || data?.detail || "PDF 다운로드에 실패했습니다.");
+  }
+
+  return response.arrayBuffer();
+}
+
 // ── 텍스트 추출 + 개념 추출 (통합, 동기) ─────────────
 // POST /api/lectures/{lecture_id}/pdf/analyze
 // → { message }
@@ -206,6 +223,10 @@ export function updateLectureStatus(lectureId, status) {
 //     set_number, page_start, page_end, status, quiz_count, created_at, updated_at}] }
 export function getQuizSets(lectureId) {
   return request(`/api/lectures/${lectureId}/quiz-sets`);
+}
+
+export function getQuizSetReport(setId) {
+  return request(`/api/quiz-sets/${setId}/report`);
 }
 
 // ── 특정 세트 상태 변경 ────────────────────────────────

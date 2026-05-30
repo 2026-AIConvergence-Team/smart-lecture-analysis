@@ -242,7 +242,23 @@ a { color:var(--brand); text-decoration:none; }
   display:flex; flex-direction:column;
   position:sticky; top:0; height:100vh;
 }
-.sidebar-head { height:62px; padding:0 22px; display:flex; align-items:center; gap:10px; }
+.sidebar-head {
+  height: 72px;
+  padding: 0 22px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.sidebar-logo-img {
+  width: 200px;
+  max-width: 100%;
+  height: auto;
+  display: block;
+  object-fit: contain;
+  flex-shrink: 0;
+}
 .sidebar-head .logo {
   width:32px; height:32px; border-radius:9px;
   background:var(--brand-grad) !important;

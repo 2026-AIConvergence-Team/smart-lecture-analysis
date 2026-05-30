@@ -1,17 +1,29 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
-async function request(path, options = {}) {
-  // sessionStorage 우선 — 같은 브라우저에서 교수/학생 탭이 동시에 열릴 때 탭별 토큰 사용
-  const token =
+function getStoredToken() {
+  return (
     sessionStorage.getItem("access_token") ||
-    localStorage.getItem("access_token");
+    localStorage.getItem("access_token")
+  );
+}
+
+async function request(path, options = {}) {
+  const {
+    skipAuth = false,
+    authToken = null,
+    headers = {},
+    ...fetchOptions
+  } = options;
+
+  const token = authToken || (!skipAuth ? getStoredToken() : null);
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
+      ...headers,
     },
-    ...options,
+    ...fetchOptions,
   });
 
   const data = await response.json().catch(() => null);
@@ -27,6 +39,7 @@ export function signup(payload) {
   return request("/auth/signup", {
     method: "POST",
     body: JSON.stringify(payload),
+    skipAuth: true,
   });
 }
 
@@ -34,6 +47,7 @@ export function login(payload) {
   return request("/auth/login", {
     method: "POST",
     body: JSON.stringify(payload),
+    skipAuth: true,
   });
 }
 
@@ -43,6 +57,9 @@ export function logout() {
   });
 }
 
-export function getMe() {
-  return request("/users/me", { method: "GET" });
+export function getMe(token) {
+  return request("/users/me", {
+    method: "GET",
+    authToken: token,
+  });
 }

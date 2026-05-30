@@ -166,6 +166,31 @@ class LectureQuizSetsWithQuizzesResponse(BaseModel):
     sets: List[QuizSetWithQuizzesResponse]
 
 
+class QuizQuestionReport(BaseModel):
+    quiz_id: int
+    total_answers: int
+    correct_count: int
+    wrong_count: int
+    correct_rate: float
+    wrong_rate: float
+    option_counts: List[int] = []
+    top_wrong_answer: Optional[str] = None
+    top_wrong_count: int = 0
+
+
+class QuizSetReportResponse(BaseModel):
+    set_id: int
+    lecture_id: int
+    status: str
+    total_submissions: int
+    total_answers: int
+    correct_count: int
+    wrong_count: int
+    correct_rate: float
+    wrong_rate: float
+    quizzes: List[QuizQuestionReport]
+
+
 class QuizRegenerateRequest(BaseModel):
     quiz_type: Optional[str] = None
     option_count: int = Field(default=4, ge=2, le=6)

@@ -4,11 +4,19 @@ import { Sparkles, Zap, AlertCircle, Send, CheckCircle2, Pencil, Trash2, Plus, R
 import RoleLayout from "../../components/RoleLayout.jsx";
 import PdfViewer from "../../components/PdfViewer.jsx";
 import { keywordsFor, quizFromKeyword, botCounts, BOT_RESP, SAMPLE_QUESTIONS } from "../../data/quizSyncMock.js";
-import useBroadcastChannel from "../../hooks/useBroadcastChannel.js";
+import useLectureRealtime from "../../hooks/useLectureRealtime.js";
 import { appendQuestionCache, getQuestionsCache, setPdfCache, setQuizSets, setCourseInfo, getPdfCache } from "../../data/sessionCache.js";
-import { generateQuizzes, getQuizGenerateStatus, getConcepts, getLectureQuizzes, deleteQuiz, updateQuizStatus, createManualQuiz, updateQuiz, getQuizDetail, getLecture, updateLectureStatus, getQuizSets, updateQuizSetStatus, regenerateQuiz, getQuestions } from "../../api/lectureApi.js";
+import { generateQuizzes, getQuizGenerateStatus, getConcepts, getLectureQuizzes, deleteQuiz, createManualQuiz, updateQuiz, getQuizDetail, getLecture, updateLectureStatus, getQuizSets, getQuizSetReport, updateQuizSetStatus, regenerateQuiz, getQuestions, downloadLecturePdf, generateClassCode } from "../../api/lectureApi.js";
 
 const PALETTE = ["var(--brand)", "var(--warning)", "#94a3b8", "#cbd5e1"];
+const CODE_VALID_SECONDS = 10 * 60;
+
+function formatRemaining(seconds) {
+  const safeSeconds = Math.max(0, seconds);
+  const minutes = Math.floor(safeSeconds / 60);
+  const rest = safeSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
 
 function DonutStat({ counts }) {
   const total = counts.reduce((a, b) => a + b, 0);
@@ -69,11 +77,45 @@ function QuizStats({ question, counts }) {
   );
 }
 
+function getSetReport(set, report = null) {
+  if (report) {
+    return {
+      answered: report.total_answers || 0,
+      correct: report.correct_count || 0,
+      wrong: report.wrong_count || 0,
+      wrongRate: Math.round(report.wrong_rate || 0),
+    };
+  }
+
+  const totals = (set.questions || []).reduce(
+    (acc, question) => {
+      const counts = set.counts?.[question.id] || new Array(question.choices.length).fill(0);
+      const answered = counts.reduce((sum, count) => sum + count, 0);
+      const correct = counts[question.answer] || 0;
+      return {
+        answered: acc.answered + answered,
+        correct: acc.correct + correct,
+        wrong: acc.wrong + Math.max(0, answered - correct),
+      };
+    },
+    { answered: 0, correct: 0, wrong: 0 }
+  );
+
+  return {
+    ...totals,
+    wrongRate: totals.answered > 0 ? Math.round((totals.wrong / totals.answered) * 100) : 0,
+  };
+}
+
+function getQuestionReport(report, quizId) {
+  return report?.quizzes?.find((quiz) => String(quiz.quiz_id) === String(quizId)) || null;
+}
+
 function TeacherLivePage() {
   const location = useLocation();
   const navigate = useNavigate();
   const {
-    code = "JEB5ZA",
+    code: initialCode = "",
     courseName = "자료구조론",
     week = 5,
     pdfFileName = null,
@@ -85,6 +127,8 @@ function TeacherLivePage() {
   const [pdfData, setPdfData] = useState(null);
   const [pdfPage, setPdfPage] = useState(1);
   const [totalPages, setTotalPages] = useState(pdfTotal);
+  const [liveCode, setLiveCode] = useState(initialCode);
+  const [issuingCode, setIssuingCode] = useState(false);
 
   // Refs to read current state inside memoized callbacks without stale closure
   const emitRef = useRef(null);
@@ -92,6 +136,7 @@ function TeacherLivePage() {
   const pdfPageRef = useRef(1);
   const setsRef = useRef([]);
   const activeSetIdRef = useRef(null);
+  const pendingSetReportIdsRef = useRef(new Set());
   const dataLoadedRef = useRef(false);   // 초기 데이터 로드 중복 방지
 
   const [rangeStart, setRangeStart] = useState(1);
@@ -118,24 +163,41 @@ function TeacherLivePage() {
   );
   const [concepts, setConcepts] = useState([]);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
+  const [quizError, setQuizError] = useState("");
   const [manualForm, setManualForm] = useState(null);   // null = 숨김
   const [editForm, setEditForm] = useState(null);       // null = 숨김
 
   const [sets, setSets] = useState([]);
+  const [setReports, setSetReports] = useState({});
   const [activeSetId, setActiveSetId] = useState(null);
 
   const [activePanel, setActivePanel] = useState("quiz");
   const [setFilter, setSetFilter] = useState("current");
-  const [joinCount, setJoinCount] = useState(12);
+  const [joinCount, setJoinCount] = useState(0);
   // 새 강의마다 질문 0에서 시작 (이전 세션 캐시·샘플 질문 제거)
   const [questions, setQuestions] = useState([]);
   const [showEndModal, setShowEndModal] = useState(false);
+  const [showCodeModal, setShowCodeModal] = useState(false);
+  const [codeExpiresAt, setCodeExpiresAt] = useState(null);
+  const [codeRemaining, setCodeRemaining] = useState(0);
 
   // class-mode hides sidebar and slims topbar
   useEffect(() => {
     document.body.classList.add("class-mode");
     return () => document.body.classList.remove("class-mode");
   }, []);
+
+  useEffect(() => {
+    if (!codeExpiresAt) return undefined;
+
+    const tick = () => {
+      setCodeRemaining(Math.max(0, Math.ceil((codeExpiresAt - Date.now()) / 1000)));
+    };
+
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [codeExpiresAt]);
 
   // Load PDF from sessionCache (set by TeacherSetupPage on upload)
   useEffect(() => {
@@ -145,17 +207,34 @@ function TeacherLivePage() {
   }, []);
 
   useEffect(() => {
-    setCourseInfo({ code, courseName, week });
-  }, [code, courseName, week]);
+    if (pdfData || !lectureId || !pdfFileName) return;
+
+    downloadLecturePdf(lectureId)
+      .then((buffer) => {
+        const bytes = new Uint8Array(buffer);
+        setPdfData(bytes);
+        setPdfCache(bytes, pdfFileName, totalPages || pdfTotal || 0);
+      })
+      .catch((err) => console.error("PDF 다운로드 실패:", err));
+  }, [pdfData, lectureId, pdfFileName, pdfTotal, totalPages]);
+
+  useEffect(() => {
+    setCourseInfo({ code: liveCode, courseName, week });
+  }, [liveCode, courseName, week]);
 
   // 마운트 시: 강의 정보 조회 + 개념 목록 + 기존 DRAFT 퀴즈 로드 (1회만 실행)
   useEffect(() => {
     if (!lectureId || dataLoadedRef.current) return;
     dataLoadedRef.current = true;
     // 강의 정보 조회 (강의 상태·코드 최신화)
-    getLecture(lectureId).catch(() => {});
+    getLecture(lectureId)
+      .then((lecture) => {
+        if (lecture?.class_code) setLiveCode(lecture.class_code);
+        setJoinCount(Number(lecture?.participant_count || 0));
+      })
+      .catch(() => {});
     // 세트 목록 조회 → 기존 백엔드 세트 복원 (setId 포함)
-    getQuizSets(lectureId)
+    getLectureQuizzes(lectureId)
       .then((res) => {
         const backendSets = res.sets || [];
         if (backendSets.length === 0) return;
@@ -171,7 +250,17 @@ function TeacherLivePage() {
             pdfRange: s.page_start === s.page_end
               ? `p.${s.page_start}`
               : `p.${s.page_start}-${s.page_end}`,
-            questions: [],
+            questions: (s.quizzes || []).map((q, i) => ({
+              id: q.quiz_id,
+              setId: q.set_id,
+              n: i + 1,
+              keyword: q.concept || "개념",
+              type: q.quiz_type === "OX" ? "OX" : q.quiz_type === "BLANK" ? "빈칸형" : "객관식",
+              question: q.question,
+              choices: Array.isArray(q.options) ? q.options : [],
+              answer: Array.isArray(q.options) ? Math.max(0, q.options.indexOf(q.answer)) : 0,
+              explain: q.explanation || "",
+            })),
             counts: {},
           }));
         });
@@ -238,6 +327,47 @@ function TeacherLivePage() {
         return [question, ...prev];
       });
     }
+    if (msg.type === "STUDENT_ANSWER") {
+      const { setId, qid, choiceIdx } = msg.payload || {};
+
+      if (setId === undefined || qid === undefined || choiceIdx === undefined) {
+        return;
+      }
+
+      setSets((prev) =>
+        prev.map((set) => {
+          const isTargetSet =
+            String(set.id) === String(setId) ||
+            String(set.setId) === String(setId);
+
+          if (!isTargetSet) return set;
+
+          const question = set.questions?.find((q) => String(q.id) === String(qid));
+          const optionCount = question?.choices?.length || 4;
+
+          const prevCounts =
+            set.counts?.[qid] || new Array(optionCount).fill(0);
+
+          const nextCounts = [...prevCounts];
+          const idx = Number(choiceIdx);
+
+          if (!Number.isInteger(idx) || idx < 0 || idx >= optionCount) {
+            return set;
+          }
+
+          nextCounts[idx] = (nextCounts[idx] || 0) + 1;
+
+          return {
+            ...set,
+            counts: {
+              ...set.counts,
+              [qid]: nextCounts,
+            },
+          };
+        })
+      );
+    }
+
     // Student joined late — respond with current state
     if (msg.type === "STATE_REQUEST") {
       // lectureId가 명시된 경우, 자기 세션과 다르면 응답하지 않음 (이전 탭 오염 방지)
@@ -264,7 +394,7 @@ function TeacherLivePage() {
     }
   }, [week, courseName, pdfFileName, totalPages]);
 
-  const emit = useBroadcastChannel("quizsync-v2", handleMessage);
+  const emit = useLectureRealtime("quizsync-v2", lectureId, handleMessage);
 
   // Keep emitRef current
   useEffect(() => { emitRef.current = emit; }, [emit]);
@@ -283,16 +413,37 @@ function TeacherLivePage() {
     emit("PDF_PAGE", { page: pdfPage });
   }, [pdfPage, emit]);
 
-  // Student count grows toward 32 during class
+  // Keep the live student count aligned with lecture_participants.
   useEffect(() => {
-    const interval = setInterval(() => {
-      setJoinCount((prev) => Math.min(prev + Math.floor(Math.random() * 2), 32));
-    }, 2000);
-    return () => clearInterval(interval);
-  }, []);
+    if (!lectureId) {
+      setJoinCount(0);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const syncParticipantCount = () => {
+      getLecture(lectureId)
+        .then((lecture) => {
+          if (cancelled) return;
+          if (lecture?.class_code) setLiveCode(lecture.class_code);
+          setJoinCount(Number(lecture?.participant_count || 0));
+        })
+        .catch(() => {});
+    };
+
+    syncParticipantCount();
+    const interval = setInterval(syncParticipantCount, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [lectureId]);
 
   // Gradually fill response counts for the active set
   useEffect(() => {
+    if (lectureId) return;
     if (!activeSetId) return;
     const timer = setInterval(() => {
       setSets((prev) => {
@@ -323,7 +474,7 @@ function TeacherLivePage() {
       });
     }, 1200);
     return () => clearInterval(timer);
-  }, [activeSetId]);
+  }, [activeSetId, lectureId]);
 
   // Keep session cache in sync
   useEffect(() => {
@@ -441,6 +592,8 @@ function TeacherLivePage() {
       return;
     }
 
+    setQuizError("");
+
     const conceptIds = selectedKeywords
       .map((kw) => keywordConceptMap[kw] ?? concepts.find((c) => c.concept_name === kw)?.concept_id)
       .filter(Boolean);
@@ -479,12 +632,9 @@ function TeacherLivePage() {
         setSelectedKeywords([]);
       })
       .catch((err) => {
-        console.error("퀴즈 생성 실패:", err.message);
-        // fallback
-        const quiz = selectedKeywords.map((kw, i) => quizFromKeyword(kw, i));
-        setQuizDraft(quiz);
-        setExtractedKeywords([]);
-        setSelectedKeywords([]);
+        const message = err.message || "퀴즈 생성에 실패했습니다.";
+        console.error("퀴즈 생성 실패:", message);
+        setQuizError(message);
       })
       .finally(() => setLoadingQuiz(false));
   };
@@ -628,70 +778,101 @@ function TeacherLivePage() {
       .catch((err) => console.error("수동 퀴즈 추가 실패:", err.message));
   };
 
-  const handlePublishQuiz = () => {
-    if (!quizDraft.length) return;
-    // 배포 시 모든 퀴즈 상태를 READY로 변경 (updateQuizStatus)
-    if (lectureId) {
-      quizDraft.forEach((q) =>
-        updateQuizStatus(q.setId, q.id, "SENT").catch((err) =>
-          console.error("상태 변경 실패:", err.message)
-        )
-      );
-    }
-    const id = Date.now();
-    const initialCounts = {};
-    quizDraft.forEach((q) => {
-      initialCounts[q.id] = botCounts(q.keyword);
-    });
-    const newSet = {
-      id,
-      idx: sets.length + 1,
-      status: "active",
-      createdAt: new Date().toLocaleTimeString("ko-KR"),
-      startPage: rangeStart,
-      pdfRange: rangeStart === rangeEnd ? `p.${rangeStart}` : `p.${rangeStart}-${rangeEnd}`,
-      questions: quizDraft,
-      counts: initialCounts,
-    };
-    setSets((prev) => [...prev, newSet]);
-    setActiveSetId(id);
-    setQuizDraft([]);
-    emit("QUIZ_PUBLISHED", {
-      setId: id,
-      questions: quizDraft,
-      startPage: rangeStart,
-      pdfRange: rangeStart === rangeEnd ? `p.${rangeStart}` : `p.${rangeStart}-${rangeEnd}`,
-    });
-    // 배포 후 백엔드 세트 목록 재조회 → 로컬 세트에 setId 주입 + 학생에게 백엔드 setId 전달
-    if (lectureId) {
-      getQuizSets(lectureId)
-        .then((res) => {
-          const list = res.sets || [];
-          if (list.length === 0) return;
-          const latest = [...list].sort((a, b) => b.set_id - a.set_id)[0];
-          setSets((prev) =>
-            prev.map((s) =>
-              s.id === id && !s.setId ? { ...s, setId: latest.set_id } : s
-            )
-          );
-          // 퀴즈 세트 상태를 SENT로 변경해야 학생이 답안 제출 가능
-          updateQuizSetStatus(latest.set_id, "SENT").catch(() => {});
-          // 학생 화면에서 답안 제출 시 실제 백엔드 set_id가 필요하므로 별도 브로드캐스트
-          emit("QUIZ_SET_BACKEND_ID", { localSetId: id, backendSetId: latest.set_id });
+const handlePublishQuiz = async () => {
+  if (!quizDraft.length) return;
+
+  const backendSetIds = [
+    ...new Set(
+      quizDraft
+        .map((q) => q.setId)
+        .filter((setId) => setId !== undefined && setId !== null && setId !== "")
+        .map(Number)
+    ),
+  ];
+
+  if (lectureId && backendSetIds.length > 0) {
+    await Promise.all(
+      backendSetIds.map((setId) =>
+        updateQuizSetStatus(setId, "SENT").catch((err) => {
+          console.error("세트 배포 상태 변경 실패:", err.message);
+          return null;
         })
-        .catch(() => {});
-    }
+      )
+    );
+  }
+
+  const id = backendSetIds[0] ?? Date.now();
+
+  const initialCounts = {};
+  quizDraft.forEach((q) => {
+    initialCounts[q.id] = new Array(q.choices?.length || 4).fill(0);
+  });
+
+  const pdfRange =
+    rangeStart === rangeEnd ? `p.${rangeStart}` : `p.${rangeStart}-${rangeEnd}`;
+
+  const newSet = {
+    id,
+    setId: backendSetIds[0] ?? null,
+    idx: sets.length + 1,
+    status: "active",
+    createdAt: new Date().toLocaleTimeString("ko-KR"),
+    startPage: rangeStart,
+    pdfRange,
+    questions: quizDraft,
+    counts: initialCounts,
   };
+
+  setSets((prev) => [...prev, newSet]);
+  setActiveSetId(id);
+  setQuizDraft([]);
+
+  emit("QUIZ_PUBLISHED", {
+    setId: id,
+    questions: quizDraft,
+    startPage: rangeStart,
+    pdfRange,
+  });
+
+  if (lectureId) {
+    getQuizSets(lectureId)
+      .then((res) => {
+        const list = res.sets || [];
+        if (list.length === 0) return;
+
+        const latest = [...list].sort((a, b) => b.set_id - a.set_id)[0];
+
+        setSets((prev) =>
+          prev.map((s) =>
+            s.id === id && !s.setId ? { ...s, setId: latest.set_id } : s
+          )
+        );
+
+        emit("QUIZ_SET_BACKEND_ID", {
+          localSetId: id,
+          backendSetId: latest.set_id,
+        });
+      })
+      .catch(() => {});
+  }
+};
 
   const handleCloseSet = (setId) => {
     setSets((prev) => prev.map((s) => (s.id === setId ? { ...s, status: "closed" } : s)));
     if (activeSetId === setId) setActiveSetId(null);
+    setActivePanel("quiz");
+    setSetFilter("closed");
     emit("QUIZ_CLOSED", { setId });
     // 백엔드 세트 상태 CLOSED로 변경 (setId가 있을 때만)
     if (lectureId) {
       const set = setsRef.current.find((s) => s.id === setId);
       if (set?.setId) {
-        updateQuizSetStatus(set.setId, "CLOSED").catch(() => {});
+        updateQuizSetStatus(set.setId, "CLOSED")
+          .then(() => getQuizSetReport(set.setId))
+          .then((report) => {
+            setSetReports((prev) => ({ ...prev, [set.setId]: report }));
+          })
+          .catch(() => {});
       }
     }
   };
@@ -705,8 +886,56 @@ function TeacherLivePage() {
     navigate("/teacher/report", { state: { lectureId } });
   };
 
+  const hasDisplayableCode = Boolean(
+    liveCode &&
+      liveCode !== "------" &&
+      liveCode !== "미발급" &&
+      !String(liveCode).includes("발급")
+  );
+  const hasValidCode = hasDisplayableCode && (!codeExpiresAt || codeRemaining > 0);
+
+  const handleIssueLiveCode = () => {
+    if (!lectureId || issuingCode || hasValidCode) return;
+
+    setIssuingCode(true);
+    generateClassCode(lectureId)
+      .then((res) => {
+        if (res?.class_code) {
+          setLiveCode(res.class_code);
+          setCodeExpiresAt(Date.now() + CODE_VALID_SECONDS * 1000);
+          setCodeRemaining(CODE_VALID_SECONDS);
+          setShowCodeModal(true);
+        }
+      })
+      .catch((err) => alert(err.message || "코드 생성에 실패했습니다."))
+      .finally(() => setIssuingCode(false));
+  };
+
   const activeSet = sets.find((s) => s.id === activeSetId);
   const closedSets = sets.filter((s) => s.status === "closed");
+  const closedReportIds = closedSets
+    .map((set) => set.setId || set.id)
+    .filter(Boolean)
+    .join(",");
+
+  useEffect(() => {
+    if (!closedReportIds) return;
+
+    closedReportIds.split(",").forEach((setId) => {
+      if (!setId || setReports[setId] || pendingSetReportIdsRef.current.has(setId)) {
+        return;
+      }
+
+      pendingSetReportIdsRef.current.add(setId);
+      getQuizSetReport(setId)
+        .then((report) => {
+          setSetReports((prev) => ({ ...prev, [setId]: report }));
+        })
+        .catch((err) => console.error("퀴즈 세트 리포트 조회 실패:", err.message))
+        .finally(() => pendingSetReportIdsRef.current.delete(setId));
+    });
+  }, [closedReportIds, setReports]);
+
   const totalQuizCount =
     quizDraft.length +
     sets.reduce((a, s) => a + s.questions.length, 0);
@@ -723,18 +952,24 @@ function TeacherLivePage() {
             <span>
               학생 <strong>{joinCount}</strong>명 접속 중
             </span>
-            <span className="live-pill">
-              <span className="dot" />
-              실시간 연동
-            </span>
           </div>
           <div className="right">
-            <span style={{ fontSize: 12, color: "var(--zinc-500)" }}>
+            <span style={{ display: hasValidCode ? "inline" : "none", fontSize: 12, color: "var(--zinc-500)" }}>
               코드{" "}
               <strong className="mono" style={{ color: "var(--zinc-900)" }}>
-                {code}
+                {liveCode}
               </strong>
             </span>
+            {!hasValidCode && (
+              <button
+                className="btn btn-primary btn-sm"
+                type="button"
+                onClick={handleIssueLiveCode}
+                disabled={!lectureId || issuingCode}
+              >
+                {issuingCode ? "코드 생성 중..." : "입장 코드 생성"}
+              </button>
+            )}
             <button
               className="btn btn-danger btn-sm"
               type="button"
@@ -783,27 +1018,29 @@ function TeacherLivePage() {
                   질문함 <span className="badge">{questions.length}</span>
                 </button>
               </div>
-              <div className="filter-group">
-                <button
-                  className={setFilter === "current" ? "on" : ""}
-                  type="button"
-                  onClick={() => setSetFilter("current")}
-                >
-                  현재 세트
-                </button>
-                <button
-                  className={setFilter === "closed" ? "on" : ""}
-                  type="button"
-                  onClick={() => setSetFilter("closed")}
-                >
-                  마감된 세트
-                </button>
-              </div>
             </div>
 
             {/* Quiz panel */}
             {activePanel === "quiz" && (
               <div className="panel-list">
+                <div className="quiz-stage-tabs">
+                  <button
+                    className={setFilter === "current" ? "active" : ""}
+                    type="button"
+                    onClick={() => setSetFilter("current")}
+                  >
+                    생성/진행
+                    <span>{quizDraft.length + (activeSet ? 1 : 0)}</span>
+                  </button>
+                  <button
+                    className={setFilter === "closed" ? "active" : ""}
+                    type="button"
+                    onClick={() => setSetFilter("closed")}
+                  >
+                    끝난 퀴즈
+                    <span>{closedSets.length}</span>
+                  </button>
+                </div>
                 {setFilter === "current" ? (
                   <>
                     {/* AI Generator card */}
@@ -1103,6 +1340,11 @@ function TeacherLivePage() {
                             >
                               <Zap size={14} /> {loadingQuiz ? "생성 중..." : "선택한 키워드로 퀴즈 생성"}
                             </button>
+                            {quizError && (
+                              <p style={{ marginTop: 10, fontSize: 12, color: "var(--danger)", lineHeight: 1.5 }}>
+                                {quizError}
+                              </p>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1307,7 +1549,10 @@ function TeacherLivePage() {
                         마감된 세트가 없습니다
                       </div>
                     ) : (
-                      closedSets.map((s) => (
+                      closedSets.map((s) => {
+                        const backendReport = setReports[s.setId || s.id] || null;
+                        const report = getSetReport(s, backendReport);
+                        return (
                         <article key={s.id} className="card">
                           <div className="card-head">
                             <div>
@@ -1318,9 +1563,25 @@ function TeacherLivePage() {
                             </div>
                             <span className="pill pill-neutral">마감됨</span>
                           </div>
+                          <div className="closed-quiz-report">
+                            <div>
+                              <strong>{report.wrongRate}%</strong>
+                              <span>오답률</span>
+                            </div>
+                            <div>
+                              <strong>{report.answered}</strong>
+                              <span>총 응답</span>
+                            </div>
+                            <div>
+                              <strong>{report.wrong}</strong>
+                              <span>오답 수</span>
+                            </div>
+                          </div>
                           <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
                             {s.questions.map((q) => {
+                              const questionReport = getQuestionReport(backendReport, q.id);
                               const counts =
+                                questionReport?.option_counts ||
                                 s.counts[q.id] ||
                                 new Array(q.choices.length).fill(0);
                               return (
@@ -1341,7 +1602,8 @@ function TeacherLivePage() {
                             })}
                           </div>
                         </article>
-                      ))
+                        );
+                      })
                     )}
                   </>
                 )}
@@ -1455,6 +1717,48 @@ function TeacherLivePage() {
                   disabled={!editForm.question.trim()}
                 >
                   저장
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showCodeModal && hasDisplayableCode && (
+          <div className="modal-backdrop open">
+            <div className="modal" style={{ maxWidth: 430 }}>
+              <div className="modal-head">
+                <h3>입장 코드가 생성되었습니다</h3>
+                <p>학생에게 아래 코드를 공유하세요. 이 창을 닫아도 상단에서 코드를 계속 볼 수 있습니다.</p>
+              </div>
+              <div className="modal-body">
+                <div
+                  className="mono"
+                  style={{
+                    minHeight: 98,
+                    display: "grid",
+                    placeItems: "center",
+                    borderRadius: 14,
+                    background: "var(--brand-soft)",
+                    color: "var(--brand-deep)",
+                    fontSize: 46,
+                    fontWeight: 800,
+                  }}
+                >
+                  {liveCode}
+                </div>
+                <div style={{ marginTop: 14, textAlign: "center", color: "var(--zinc-600)", fontSize: 13 }}>
+                  남은 시간{" "}
+                  <strong className="mono" style={{ color: "var(--zinc-900)", fontSize: 18 }}>
+                    {formatRemaining(codeRemaining)}
+                  </strong>
+                </div>
+              </div>
+              <div className="modal-foot">
+                <button className="btn btn-ghost" type="button" onClick={() => navigator.clipboard.writeText(liveCode)}>
+                  복사
+                </button>
+                <button className="btn btn-primary" type="button" onClick={() => setShowCodeModal(false)}>
+                  닫기
                 </button>
               </div>
             </div>

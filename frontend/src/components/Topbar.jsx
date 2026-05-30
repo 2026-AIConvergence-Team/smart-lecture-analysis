@@ -1,8 +1,8 @@
 import { ArrowLeft, LogOut } from "lucide-react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { logout } from "../api/authApi.js";
 
-function Topbar({ role = "teacher" }) {
+function Topbar() {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -19,22 +19,30 @@ function Topbar({ role = "teacher" }) {
   };
 
   const handleBack = () => {
-    navigate(-1);
-  };
-
-  const handleRoleSwitch = (newRole) => {
-    if (newRole === "teacher") {
-      navigate("/teacher/courses");
-    } else {
-      navigate("/student/courses");
+    if (location.pathname.includes("/teacher/live")) {
+      const state = location.state || {};
+      navigate(state.courseId ? "/teacher/week-select" : "/teacher/courses", {
+        replace: true,
+        state: {
+          courseId: state.courseId,
+          courseName: state.courseName,
+          section: state.section,
+          students: state.students,
+          courseMeta: state.courseMeta,
+          currentWeek: state.week,
+        },
+      });
+      return;
     }
+
+    navigate(-1);
   };
 
   const handleLogout = async () => {
     try {
       await logout();
     } catch {
-      // 토큰 만료 등 실패해도 로그아웃 처리
+      // Token expiry should not block local logout cleanup.
     } finally {
       localStorage.removeItem("access_token");
       localStorage.removeItem("teacher_access_token");
@@ -52,7 +60,13 @@ function Topbar({ role = "teacher" }) {
     <header className="topbar">
       <div className="crumbs">
         {showBackBtn && (
-          <button className="btn btn-ghost btn-sm" style={{ padding: "0 10px", height: "30px" }} title="뒤로 가기" onClick={handleBack}>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ padding: "0 10px", height: "30px" }}
+            title="뒤로 가기"
+            type="button"
+            onClick={handleBack}
+          >
             <ArrowLeft size={14} /> 뒤로
           </button>
         )}
@@ -61,19 +75,7 @@ function Topbar({ role = "teacher" }) {
         </span>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
-        <span className="live-pill">
-          <span className="dot"></span>
-          실시간 연동
-        </span>
-        <div className="role-toggle" title="시연용 역할 전환">
-          <button className={role === "teacher" ? "on" : ""} onClick={() => handleRoleSwitch("teacher")}>
-            교수
-          </button>
-          <button className={role === "student" ? "on" : ""} onClick={() => handleRoleSwitch("student")}>
-            학생
-          </button>
-        </div>
-        <button className="btn btn-ghost btn-sm" title="로그아웃" onClick={handleLogout}>
+        <button className="btn btn-ghost btn-sm" title="로그아웃" type="button" onClick={handleLogout}>
           <LogOut size={14} /> 로그아웃
         </button>
       </div>
