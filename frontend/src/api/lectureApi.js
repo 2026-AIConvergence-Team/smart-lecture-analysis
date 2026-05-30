@@ -266,6 +266,20 @@ export function regenerateQuiz(setId, quizId, payload = {}) {
   });
 }
 
+// ── 학생 복습 페이지 조회 ──────────────────────────────
+// GET /api/lectures/{lecture_id}/review
+// → { lecture_id, week, date, my_stats, sets }
+export function getLectureReview(lectureId) {
+  return request(`/api/lectures/${lectureId}/review`);
+}
+
+// ── 교사 수업 리포트 조회 ──────────────────────────────
+// GET /api/lectures/{lecture_id}/report
+// → { lecture_id, week, date, stats, concept_stats, sets, anonymous_questions }
+export function getLectureReport(lectureId) {
+  return request(`/api/lectures/${lectureId}/report`);
+}
+
 // ── 학생 답안 제출 ─────────────────────────────────────
 // POST /api/lectures/{lecture_id}/quiz-sets/{set_id}/submissions
 // { answers: [{ quiz_id, selected }] }

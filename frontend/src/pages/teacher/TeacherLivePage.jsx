@@ -127,14 +127,8 @@ function TeacherLivePage() {
   const [activePanel, setActivePanel] = useState("quiz");
   const [setFilter, setSetFilter] = useState("current");
   const [joinCount, setJoinCount] = useState(12);
-  const [questions, setQuestions] = useState(() => {
-    const cached = getQuestionsCache();
-    const defaults = SAMPLE_QUESTIONS.map((q) => ({ ...q, week, time: q.ago }));
-    return [
-      ...cached,
-      ...defaults.filter((item) => !cached.some((q) => q.id === item.id)),
-    ];
-  });
+  // 새 강의마다 질문 0에서 시작 (이전 세션 캐시·샘플 질문 제거)
+  const [questions, setQuestions] = useState([]);
   const [showEndModal, setShowEndModal] = useState(false);
 
   // class-mode hides sidebar and slims topbar
@@ -221,7 +215,7 @@ function TeacherLivePage() {
               id: q.id,
               text: q.content,
               week,
-              time: new Date(q.created_at).toLocaleTimeString("ko-KR"),
+              time: new Date(q.created_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }),
             }));
           return incoming.length > 0 ? [...incoming, ...prev] : prev;
         });
@@ -246,10 +240,15 @@ function TeacherLivePage() {
     }
     // Student joined late — respond with current state
     if (msg.type === "STATE_REQUEST") {
-      // Use ref if available, otherwise fall back to sessionStorage cache
-      const pdfd = pdfDataRef.current || getPdfCache().pdfData;
+      // lectureId가 명시된 경우, 자기 세션과 다르면 응답하지 않음 (이전 탭 오염 방지)
+      const requestedId = msg.payload?.lectureId;
+      if (requestedId && lectureId && requestedId !== lectureId) return;
+      // Always tell student which course/week this is
+      emitRef.current?.("COURSE_INFO", { courseName, week });
+      const pdfd = pdfDataRef.current;
       if (pdfd) {
         emitRef.current?.("PDF_LOADED", {
+          lectureId,
           pdfData: pdfd,
           pdfFileName,
           pdfTotal: totalPages,
@@ -263,7 +262,7 @@ function TeacherLivePage() {
         emitRef.current?.("QUIZ_PUBLISHED", { setId: active.id, questions: active.questions });
       }
     }
-  }, [week, pdfFileName, totalPages]);
+  }, [week, courseName, pdfFileName, totalPages]);
 
   const emit = useBroadcastChannel("quizsync-v2", handleMessage);
 
@@ -275,8 +274,9 @@ function TeacherLivePage() {
   useEffect(() => {
     if (!pdfData || pdfBroadcastedRef.current) return;
     pdfBroadcastedRef.current = true;
-    emit("PDF_LOADED", { pdfData, pdfFileName, pdfTotal: totalPages });
-  }, [pdfData, pdfFileName, totalPages, emit]);
+    emit("COURSE_INFO", { courseName, week });
+    emit("PDF_LOADED", { lectureId, pdfData, pdfFileName, pdfTotal: totalPages });
+  }, [pdfData, pdfFileName, totalPages, emit, courseName, week, lectureId]);
 
   // Sync PDF page to students
   useEffect(() => {
@@ -695,13 +695,13 @@ function TeacherLivePage() {
     }
   };
 
-  const handleConfirmEnd = () => {
+  const handleConfirmEnd = async () => {
     emit("CLASS_ENDED", {});
-    // 강의 상태를 "ended"로 변경 (실패해도 리포트로 이동)
+    // 강의 상태를 "ended"로 변경한 뒤 리포트로 이동 (실패해도 이동)
     if (lectureId) {
-      updateLectureStatus(lectureId, "ended").catch(() => {});
+      await updateLectureStatus(lectureId, "ended").catch(() => {});
     }
-    navigate("/teacher/report");
+    navigate("/teacher/report", { state: { lectureId } });
   };
 
   const activeSet = sets.find((s) => s.id === activeSetId);
