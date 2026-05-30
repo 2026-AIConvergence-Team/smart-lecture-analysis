@@ -457,6 +457,7 @@ function TeacherLivePage() {
       page_start: rangeStart,
       page_end: rangeEnd,
       quiz_type: "MIXED",
+      selected_keywords: selectedKeywords,
       ...(conceptIds.length > 0 && { concept_ids: conceptIds }),
     })
       .then(() => getQuizGenerateStatus(lectureId))
@@ -466,7 +467,7 @@ function TeacherLivePage() {
           id: q.quiz_id,
           setId: q.set_id,
           n: i + 1,
-          keyword: conceptIdToKeyword[q.concept_id] || q.concept || "개념",
+          keyword: selectedKeywords[i] || conceptIdToKeyword[q.concept_id] || q.concept || "개념",
           type: q.quiz_type === "OX" ? "OX" : q.quiz_type === "BLANK" ? "빈칸형" : "객관식",
           question: q.question,
           choices: Array.isArray(q.options) ? q.options : [],

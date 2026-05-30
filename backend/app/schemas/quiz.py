@@ -8,6 +8,7 @@ class QuizGenerateRequest(BaseModel):
     page_start: int = Field(..., ge=1)
     page_end: int = Field(..., ge=1)
     concept_ids: Optional[List[int]] = None
+    selected_keywords: Optional[List[str]] = None
 
     # Supported values: MIXED, BLANK, DEFINITION, KEYWORD_CHOICE, OX
     quiz_type: str = "MIXED"

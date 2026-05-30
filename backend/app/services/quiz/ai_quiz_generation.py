@@ -1059,10 +1059,12 @@ def build_batch_ai_messages(
         )
 
         compact_materials.append({
+            "material_id": material.get("material_id"),
             "concept_id": material.get("concept_id"),
             "page_num": material.get("page_num"),
             "concept_label": material.get("concept_label"),
             "original_concept_name": material.get("original_concept_name"),
+            "required_keyword": material.get("required_keyword") or "",
             "keywords": material.get("keywords") or [],
             "source_sentences": source_sentences,
             "preferred_quiz_type": preferred_quiz_type,
@@ -1072,6 +1074,7 @@ def build_batch_ai_messages(
     output_schema = {
         "quizzes": [
             {
+                "material_id": "concept_id:required_keyword",
                 "concept_id": 1,
                 "quiz_type": "MULTIPLE_CHOICE | OX | SHORT_ANSWER | SUBJECTIVE",
                 "question": "문제 내용",
@@ -1104,7 +1107,10 @@ def build_batch_ai_messages(
         "- SUBJECTIVE: 주관식\n\n"
         "공통 규칙:\n"
         "- quizzes 개수는 입력 items 개수와 같아야 하며, 어떤 item도 생략하지 마라.\n"
+        "- 각 quiz에는 해당 item의 material_id를 그대로 넣어라.\n"
         "- 각 quiz에는 해당 item의 concept_id를 그대로 넣어라.\n"
+        "- item.required_keyword가 비어 있지 않으면, 문제/정답/해설 중 최소 하나에서 그 키워드를 직접 다루어라.\n"
+        "- required_keyword가 있는 item은 그 키워드 1개에 대응하는 quiz 1개를 만든다. 같은 concept_id라도 material_id가 다르면 별도 quiz로 만든다.\n"
         "- quiz_type은 반드시 MULTIPLE_CHOICE, OX, SHORT_ANSWER, SUBJECTIVE 중 하나다.\n"
         "- BLANK, DEFINITION, KEYWORD_CHOICE는 절대 사용하지 마라.\n"
         "- preferred_quiz_type을 우선 따르되, source_sentences에 더 적합한 유형이 있으면 새 타입 안에서 변경해도 된다.\n"
@@ -1299,7 +1305,7 @@ def extract_material_focus_markers(material: Dict[str, Any]) -> List[str]:
     """
     texts = []
 
-    for key in ("concept_label", "original_concept_name", "best_source_sentence"):
+    for key in ("required_keyword", "concept_label", "original_concept_name", "best_source_sentence"):
         value = normalize_ai_text(material.get(key))
         if value:
             texts.append(value)
@@ -1645,12 +1651,17 @@ def clean_batch_ai_quiz(
     def reject(reason: str) -> Tuple[None, str]:
         return None, reason
 
+    raw_material_id = normalize_ai_text(raw_quiz.get("material_id"))
+
     try:
         concept_id = int(raw_quiz.get("concept_id"))
     except Exception:
         return reject("concept_id를 int로 변환할 수 없습니다.")
 
-    material = material_map.get(concept_id)
+    material = material_map.get(raw_material_id) if raw_material_id else None
+    if not material:
+        material = material_map.get(concept_id)
+    material_id = normalize_ai_text(material.get("material_id")) if material else ""
     if not material:
         return reject("material_map에서 concept_id를 찾지 못했습니다.")
 
@@ -1788,6 +1799,18 @@ def clean_batch_ai_quiz(
     else:
         return reject(f"지원하지 않는 quiz_type입니다. quiz_type={quiz_type}")
 
+    required_keyword = normalize_ai_text(material.get("required_keyword"))
+    if required_keyword:
+        normalized_required_keyword = normalize_for_ai_match(required_keyword)
+        generated_focus_text = normalize_for_ai_match(
+            f"{question} {answer} {explanation}"
+        )
+        if (
+            len(normalized_required_keyword) >= 2
+            and normalized_required_keyword not in generated_focus_text
+        ):
+            return reject("selected keyword is not directly included in the generated quiz content.")
+
     if not is_quiz_focused_on_material(
         question=question,
         answer=answer,
@@ -1813,11 +1836,13 @@ def clean_batch_ai_quiz(
     original_concept_name = normalize_ai_text(material.get("original_concept_name"))
 
     cleaned_quiz = {
+        "material_id": material_id,
         "lecture_id": material.get("lecture_id"),
         "concept_id": concept_id,
         "concept_name": concept_label or original_concept_name,
         "concept_label": concept_label,
         "original_concept_name": original_concept_name,
+        "selected_keyword": material.get("required_keyword") or "",
         "concept_keywords": material.get("keywords") or [],
         "page_num": material.get("page_num"),
         "quiz_type": quiz_type,
@@ -1855,14 +1880,30 @@ def parse_batch_ai_quizzes(
     if not isinstance(raw_quizzes, list):
         raise AIQuizGenerationError("AI batch 응답에 quizzes 배열이 없습니다.")
 
-    material_map = {
-        int(material["concept_id"]): material
-        for material in materials
-        if material.get("concept_id") is not None
-    }
+    material_map = {}
+    concept_material_counts = {}
+
+    for material in materials:
+        if material.get("concept_id") is None:
+            continue
+
+        concept_id = int(material["concept_id"])
+        concept_material_counts[concept_id] = concept_material_counts.get(concept_id, 0) + 1
+
+        material_id = normalize_ai_text(material.get("material_id"))
+        if material_id:
+            material_map[material_id] = material
+
+    for material in materials:
+        if material.get("concept_id") is None:
+            continue
+
+        concept_id = int(material["concept_id"])
+        if concept_material_counts.get(concept_id) == 1:
+            material_map[concept_id] = material
 
     cleaned_quizzes = []
-    seen_concept_ids = set()
+    seen_material_ids = set()
 
     for raw_quiz in raw_quizzes:
         if not isinstance(raw_quiz, dict):
@@ -1887,43 +1928,43 @@ def parse_batch_ai_quizzes(
             )
             continue
 
-        concept_id = cleaned["concept_id"]
-        if concept_id in seen_concept_ids:
+        material_id = normalize_ai_text(cleaned.get("material_id")) or str(cleaned["concept_id"])
+        if material_id in seen_material_ids:
             continue
 
-        seen_concept_ids.add(concept_id)
+        seen_material_ids.add(material_id)
         cleaned_quizzes.append(cleaned)
 
     return cleaned_quizzes
 
 
-def get_generated_concept_ids(quizzes: List[Dict]) -> set[int]:
-    concept_ids = set()
+def get_material_identity(item: Dict[str, Any]) -> str:
+    material_id = normalize_ai_text(item.get("material_id"))
+    if material_id:
+        return material_id
 
-    for quiz in quizzes:
-        try:
-            concept_ids.add(int(quiz.get("concept_id")))
-        except Exception:
-            continue
+    return str(item.get("concept_id") or "")
 
-    return concept_ids
+
+def get_generated_material_ids(quizzes: List[Dict]) -> set[str]:
+    return {
+        material_id
+        for material_id in (get_material_identity(quiz) for quiz in quizzes)
+        if material_id
+    }
 
 
 def get_missing_materials(
     materials: List[Dict[str, Any]],
     generated_quizzes: List[Dict],
 ) -> List[Dict[str, Any]]:
-    generated_concept_ids = get_generated_concept_ids(generated_quizzes)
+    generated_material_ids = get_generated_material_ids(generated_quizzes)
 
     missing = []
 
     for material in materials:
-        try:
-            concept_id = int(material.get("concept_id"))
-        except Exception:
-            continue
-
-        if concept_id not in generated_concept_ids:
+        material_id = get_material_identity(material)
+        if material_id and material_id not in generated_material_ids:
             missing.append(material)
 
     return missing
@@ -2057,20 +2098,19 @@ def generate_quizzes_with_ai_batch(
         request_delay_seconds=request_delay_seconds,
     )
 
-    # AI 응답 중복은 concept_id 기준으로 제거합니다.
+    # AI 응답 중복은 material_id 기준으로 제거합니다.
     unique_quizzes = []
-    seen_concept_ids = set()
+    seen_material_ids = set()
 
     for quiz in generated_quizzes:
-        try:
-            concept_id = int(quiz.get("concept_id"))
-        except Exception:
+        material_id = get_material_identity(quiz)
+        if not material_id:
             continue
 
-        if concept_id in seen_concept_ids:
+        if material_id in seen_material_ids:
             continue
 
-        seen_concept_ids.add(concept_id)
+        seen_material_ids.add(material_id)
         unique_quizzes.append(quiz)
 
     generated_quizzes = unique_quizzes
@@ -2099,18 +2139,17 @@ def generate_quizzes_with_ai_batch(
                 request_delay_seconds=request_delay_seconds,
             )
 
-            generated_concept_ids = get_generated_concept_ids(generated_quizzes)
+            generated_material_ids = get_generated_material_ids(generated_quizzes)
 
             for quiz in retry_quizzes:
-                try:
-                    concept_id = int(quiz.get("concept_id"))
-                except Exception:
+                material_id = get_material_identity(quiz)
+                if not material_id:
                     continue
 
-                if concept_id in generated_concept_ids:
+                if material_id in generated_material_ids:
                     continue
 
-                generated_concept_ids.add(concept_id)
+                generated_material_ids.add(material_id)
                 generated_quizzes.append(quiz)
 
                 if len(generated_quizzes) >= target_max:
