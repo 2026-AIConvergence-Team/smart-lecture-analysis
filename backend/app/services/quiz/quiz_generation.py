@@ -2531,6 +2531,63 @@ def get_safe_keywords_for_ai(concept: models.Concept) -> List[str]:
 
     return unique_keep_order(keywords)
 
+
+def normalize_selected_keywords(selected_keywords: Optional[List[str]]) -> List[str]:
+    if not selected_keywords:
+        return []
+
+    return unique_keep_order([
+        normalize_text_item(str(keyword))
+        for keyword in selected_keywords
+        if normalize_text_item(str(keyword))
+    ])
+
+
+def get_keyword_match_terms_for_concept(concept: models.Concept) -> List[str]:
+    return unique_keep_order([
+        *parse_keywords(getattr(concept, "keywords", "") or ""),
+        normalize_text_item(getattr(concept, "concept_name", "") or ""),
+    ])
+
+
+def concept_matches_selected_keyword(
+    concept: models.Concept,
+    selected_keyword: str,
+) -> bool:
+    normalized_keyword = normalize_for_match(selected_keyword)
+    if not normalized_keyword:
+        return False
+
+    for term in get_keyword_match_terms_for_concept(concept):
+        normalized_term = normalize_for_match(term)
+        if not normalized_term:
+            continue
+
+        if normalized_keyword == normalized_term:
+            return True
+
+        if len(normalized_keyword) >= 3 and normalized_keyword in normalized_term:
+            return True
+
+        if len(normalized_term) >= 3 and normalized_term in normalized_keyword:
+            return True
+
+    return False
+
+
+def find_concept_for_selected_keyword(
+    concepts: List[models.Concept],
+    selected_keyword: str,
+) -> Optional[models.Concept]:
+    for concept in concepts:
+        if concept_matches_selected_keyword(concept, selected_keyword):
+            return concept
+
+    if len(concepts) == 1:
+        return concepts[0]
+
+    return None
+
 def is_usable_ai_source_sentence(value: str) -> bool:
     """
     AI에게 넘길 source_sentence 후보를 고릅니다.
@@ -3143,6 +3200,7 @@ def build_ai_quiz_material(
     option_count: int,
     index_seed: int = 0,
     page_context_map: Optional[Dict[int, str]] = None,
+    selected_keyword: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     AI 출제에 필요한 재료만 구성합니다.
@@ -3155,10 +3213,15 @@ def build_ai_quiz_material(
     if not source_sentences:
         return None
 
+    required_keyword = normalize_text_item(str(selected_keyword or ""))
+
     concept_label = get_refined_concept_label_for_ai(
         concept=concept,
         source_sentences=source_sentences,
     )
+
+    if required_keyword and is_safe_concept_label(required_keyword):
+        concept_label = required_keyword
 
     # AI 생성에서는 concept_label이 완벽하지 않아도 source_sentence가 충분하면
     # AI가 문제를 만들 수 있으므로 안전한 fallback을 둡니다.
@@ -3236,6 +3299,10 @@ def build_ai_quiz_material(
         if not short_answer_candidates:
             preferred_quiz_type = "MULTIPLE_CHOICE"
 
+    material_keywords = get_safe_keywords_for_ai(concept)
+    if required_keyword:
+        material_keywords = unique_keep_order([required_keyword, *material_keywords])
+
     quality_score = calculate_material_quality_score(
         concept=concept,
         concept_label=concept_label,
@@ -3252,13 +3319,17 @@ def build_ai_quiz_material(
         f"best_source={best_source_sentence[:120]}"
     )
 
+    material_key = normalize_for_match(required_keyword) or str(index_seed)
+
     return {
+        "material_id": f"{concept.id}:{material_key}",
         "lecture_id": concept.lecture_id,
         "concept_id": concept.id,
         "page_num": concept.page_num,
         "original_concept_name": normalize_text_item(concept.concept_name),
         "concept_label": concept_label,
-        "keywords": get_safe_keywords_for_ai(concept)[:AI_BATCH_MAX_KEYWORDS],
+        "required_keyword": required_keyword,
+        "keywords": material_keywords[:AI_BATCH_MAX_KEYWORDS],
         "source_sentences": source_sentences[:AI_BATCH_MAX_SOURCE_SENTENCES],
         "best_source_sentence": best_source_sentence,
         "preferred_quiz_type": preferred_quiz_type,
@@ -3275,6 +3346,7 @@ def prepare_quiz_materials_for_ai(
     target_min: int = AI_TARGET_MIN_QUIZZES,
     target_max: int = AI_TARGET_MAX_QUIZZES,
     page_context_map: Optional[Dict[int, str]] = None,
+    selected_keywords: Optional[List[str]] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """
     AI 호출 전에 출제 가능한 material을 선별하고 요청 범위에 맞게 제한합니다.
@@ -3294,6 +3366,73 @@ def prepare_quiz_materials_for_ai(
 
     normalized_count_per_concept = max(1, count_per_concept)
     normalized_target_max = max(1, min(SERVICE_MAX_QUIZ_COUNT, target_max))
+    normalized_selected_keywords = normalize_selected_keywords(selected_keywords)
+
+    if normalized_selected_keywords:
+        for keyword_index, selected_keyword in enumerate(normalized_selected_keywords):
+            concept = find_concept_for_selected_keyword(
+                concepts=concepts,
+                selected_keyword=selected_keyword,
+            )
+
+            if not concept:
+                failed_count += 1
+                print(
+                    "[QUIZ_AI_MATERIAL_SKIP] "
+                    f"reason=selected_keyword_concept_not_found, "
+                    f"selected_keyword={selected_keyword}"
+                )
+                continue
+
+            material = build_ai_quiz_material(
+                concept=concept,
+                quiz_type=quiz_type,
+                option_count=option_count,
+                index_seed=keyword_index,
+                page_context_map=page_context_map,
+                selected_keyword=selected_keyword,
+            )
+
+            if not material:
+                failed_count += 1
+                print(
+                    "[QUIZ_AI_MATERIAL_SKIP] "
+                    f"reason=selected_keyword_material_failed, "
+                    f"selected_keyword={selected_keyword}, "
+                    f"concept_id={getattr(concept, 'id', None)}"
+                )
+                continue
+
+            candidate_materials.append(material)
+
+        if not candidate_materials:
+            return [], failed_count
+
+        candidate_materials = [
+            material
+            for material in candidate_materials
+            if material.get("material_id")
+            and material.get("concept_label")
+            and material.get("source_sentences")
+            and material.get("best_source_sentence")
+            and material.get("preferred_quiz_type") in NEW_GENERATED_QUIZ_TYPES
+        ]
+
+        selected_materials = candidate_materials[:normalized_target_max]
+
+        print(
+            "[QUIZ_AI_PREFILTER] "
+            f"concepts={len(concepts)}, "
+            f"selected_keywords={len(normalized_selected_keywords)}, "
+            f"candidates={len(candidate_materials)}, "
+            f"selected={len(selected_materials)}, "
+            f"failed={failed_count}, "
+            f"target_min={target_min}, "
+            f"target_max={normalized_target_max}, "
+            f"quiz_type={quiz_type}"
+        )
+
+        return selected_materials, failed_count
 
     for concept_index, concept in enumerate(concepts):
         local_created = 0
