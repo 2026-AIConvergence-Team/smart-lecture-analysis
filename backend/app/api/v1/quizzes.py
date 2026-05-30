@@ -26,6 +26,7 @@ from app.services.quiz.quiz_generation import (
     get_concept_label,
     infer_concept_label_from_source_sentence,
     is_generation_quiz_type_enabled,
+    normalize_selected_keywords,
     prepare_quiz_materials_for_ai,
     serialize_options,
 )
@@ -473,11 +474,18 @@ def generate_lecture_quizzes(
             "해당 범위에서 퀴즈를 생성할 수 있는 개념을 찾지 못했습니다.",
         )
 
-    target_quiz_count = calculate_target_quiz_count(
-        page_start=request_data.page_start,
-        page_end=request_data.page_end,
-        available_concept_count=len(target_concepts),
-    )
+    selected_keywords = normalize_selected_keywords(request_data.selected_keywords)
+
+    if selected_keywords:
+        target_quiz_count = min(SERVICE_MAX_QUIZ_COUNT, len(selected_keywords))
+        available_material_count = len(selected_keywords)
+    else:
+        target_quiz_count = calculate_target_quiz_count(
+            page_start=request_data.page_start,
+            page_end=request_data.page_end,
+            available_concept_count=len(target_concepts),
+        )
+        available_material_count = len(target_concepts)
 
     if target_quiz_count <= 0:
         return error_response(
@@ -490,7 +498,7 @@ def generate_lecture_quizzes(
     internal_target_max = min(
         SERVICE_MAX_QUIZ_COUNT,
         AI_TARGET_MAX_QUIZZES,
-        len(target_concepts),
+        available_material_count,
         max(target_quiz_count + 2, target_quiz_count),
     )
 
@@ -565,6 +573,7 @@ def generate_lecture_quizzes(
             target_min=effective_target_min,
             target_max=effective_target_max,
             page_context_map=page_context_map,
+            selected_keywords=selected_keywords,
         )
 
         failed_count += prefilter_failed_count
