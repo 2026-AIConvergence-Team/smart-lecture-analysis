@@ -208,9 +208,13 @@ def get_teacher_report(
 
         is_weak = correct_rate < 50
 
+        # 키워드에서 앞 1~2개 추출 (없으면 개념명 사용)
+        kw_list = [k.strip() for k in (concept.keywords or "").split(",") if k.strip()]
+        display_name = ", ".join(kw_list[:2]) if kw_list else concept.concept_name
+
         concept_stats.append(
             schemas.ConceptStat(
-                concept=concept.concept_name,
+                concept=display_name,
                 avg_correct_rate=correct_rate,
                 is_weak=is_weak,
             )
