@@ -43,3 +43,4 @@ urllib3
 uvicorn>=0.20.0
 websockets
 pytesseract
+kiwipiepy
