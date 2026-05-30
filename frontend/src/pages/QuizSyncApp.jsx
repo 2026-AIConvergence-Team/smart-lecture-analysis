@@ -12,7 +12,7 @@ const VIEW_LABELS = {
   courses: "강의 목록",
   setup: "강의 설정",
   profLive: "수업 진행",
-  studentCourses: "수업 목록",
+  studentCourses: "My Courses",
   studentLive: "수업 참여",
   studentReview: "복습",
 };
@@ -162,8 +162,7 @@ function QuizSyncApp() {
         <section className="content">
           <div className="page-heading-row">
             <div>
-              <p className="eyebrow">Course Dashboard</p>
-              <h1 className="page-title">내 강의</h1>
+              <h1 className="page-title brand-title">Course Dashboard</h1>
               <p className="page-sub">담당 강의를 선택해 수업 코드를 만들고 학생을 입장시킬 수 있습니다.</p>
             </div>
             <button className="btn btn-primary" type="button" onClick={() => setActiveView("setup")}>새 강의 추가</button>
@@ -477,8 +476,7 @@ function QuizSyncApp() {
         <section className="content">
           <div className="page-heading-row">
             <div>
-              <p className="eyebrow">내 수업</p>
-              <h1 className="page-title">수업 목록</h1>
+              <h1 className="page-title brand-title">My Courses</h1>
               <p className="page-sub">수업을 선택한 뒤 교수님이 띄운 수업 코드를 입력해 강의실에 입장합니다.</p>
             </div>
           </div>
@@ -651,8 +649,8 @@ function QuizSyncApp() {
             </>
           ) : (
             <>
-              <div className="label">내 수업</div>
-              <button className={`nav-btn ${activeView === "studentCourses" ? "active" : ""}`} type="button" onClick={() => setActiveView("studentCourses")}>수업 목록</button>
+              <div className="label">My Courses</div>
+              <button className={`nav-btn ${activeView === "studentCourses" ? "active" : ""}`} type="button" onClick={() => setActiveView("studentCourses")}>My Courses</button>
               <button className={`nav-btn ${activeView === "studentLive" ? "active" : ""}`} type="button" onClick={() => setActiveView("studentLive")}>복습</button>
             </>
           )}

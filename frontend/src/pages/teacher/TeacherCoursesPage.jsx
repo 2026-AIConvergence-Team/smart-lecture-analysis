@@ -1,26 +1,47 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Trash2 } from "lucide-react";
+import { BookOpen, Plus, Trash2, UsersRound } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import { getCourses, createCourse, deleteCourse } from "../../api/courseApi.js";
+import sungshinLogo from "../../assets/sungshin_logo.svg";
 
 function deriveCourseStatus(course) {
   const lectures = course.lectures ?? [];
-  if (lectures.some((l) => l.status === "ACTIVE")) return "live";
+  if (lectures.some((l) => String(l.status || "").toUpperCase() === "ACTIVE")) return "live";
   if (lectures.length > 0) return "done";
   return "idle";
 }
 
 const STATUS_PILL = {
-  live: <span className="status-tag pill pill-success"><span className="dot" style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981" }} />진행 중</span>,
-  idle: <span className="status-tag pill pill-neutral">대기</span>,
-  done: <span className="status-tag pill pill-neutral">종료</span>,
+  live: (
+    <span className="status-tag teacher-course-status pill pill-success">
+      <span className="dot" />
+      진행 중
+    </span>
+  ),
+  idle: <span className="status-tag teacher-course-status pill pill-brand">대기</span>,
+  done: <span className="status-tag teacher-course-status pill pill-neutral">종료</span>,
 };
 
 const CTA_LABEL = {
   live: "수업 시작 →",
   idle: "수업 시작 →",
   done: "리포트 보기 →",
+};
+
+const WEEKDAYS = ["월", "화", "수", "목", "금"];
+const PERIODS = Array.from({ length: 9 }, (_, index) => index + 1);
+
+const DEFAULT_COURSE_FORM = {
+  year: 2026,
+  semester: "1학기",
+  title: "",
+  department: "",
+  section: "01",
+  student_count: 30,
+  schedule_day: "월",
+  schedule_start_period: 1,
+  schedule_end_period: 2,
 };
 
 function groupBySemester(courses) {
@@ -35,20 +56,27 @@ function groupBySemester(courses) {
 
 // ── 강의 추가 모달 ───────────────────────────────────────
 function AddCourseModal({ open, onClose, onAdd, adding }) {
-  const [form, setForm] = useState({
-    year: 2026,
-    semester: "1학기",
-    title: "",
-    department: "",
-    section: "01",
-    student_count: 30,
-    schedule: "",
-  });
+  const [form, setForm] = useState(DEFAULT_COURSE_FORM);
 
   const handleAdd = () => {
     if (!form.title.trim()) return;
-    onAdd(form);
-    setForm({ year: 2026, semester: "1학기", title: "", department: "", section: "01", student_count: 30, schedule: "" });
+    const { schedule_day, schedule_start_period, schedule_end_period, ...courseForm } = form;
+    const startPeriod = Number(schedule_start_period);
+    const endPeriod = Math.max(Number(schedule_end_period), startPeriod);
+    onAdd({
+      ...courseForm,
+      schedule: `${schedule_day} ${startPeriod}교시~${endPeriod}교시`,
+    });
+    setForm(DEFAULT_COURSE_FORM);
+  };
+
+  const handleStartPeriodChange = (value) => {
+    const nextStart = Number(value);
+    setForm({
+      ...form,
+      schedule_start_period: nextStart,
+      schedule_end_period: Math.max(Number(form.schedule_end_period), nextStart),
+    });
   };
 
   return (
@@ -81,9 +109,31 @@ function AddCourseModal({ open, onClose, onAdd, adding }) {
             <label>학과</label>
             <input className="input" placeholder="예: 컴퓨터공학과" value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} />
           </div>
-          <div className="form-row">
-            <label>수업 시간</label>
-            <input className="input" placeholder="예: 월/수 10:30" value={form.schedule} onChange={(e) => setForm({ ...form, schedule: e.target.value })} />
+          <div className="form-grid-3">
+            <div className="form-row">
+              <label>요일</label>
+              <select className="select" value={form.schedule_day} onChange={(e) => setForm({ ...form, schedule_day: e.target.value })}>
+                {WEEKDAYS.map((day) => (
+                  <option key={day} value={day}>{day}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-row">
+              <label>시작 교시</label>
+              <select className="select" value={form.schedule_start_period} onChange={(e) => handleStartPeriodChange(e.target.value)}>
+                {PERIODS.map((period) => (
+                  <option key={period} value={period}>{period}교시</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-row">
+              <label>종료 교시</label>
+              <select className="select" value={form.schedule_end_period} onChange={(e) => setForm({ ...form, schedule_end_period: Number(e.target.value) })}>
+                {PERIODS.filter((period) => period >= Number(form.schedule_start_period)).map((period) => (
+                  <option key={period} value={period}>{period}교시</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="form-grid-2">
             <div className="form-row">
@@ -215,8 +265,7 @@ function TeacherCoursesPage() {
         {/* 헤더 */}
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 24 }}>
           <div>
-            <p className="eyebrow">Course Dashboard</p>
-            <h1 className="page-title">내 강의</h1>
+            <h1 className="page-title brand-title">Course Dashboard</h1>
             <p className="page-sub">담당 강의를 선택해 수업 코드를 만들고 학생을 입장시킬 수 있습니다.</p>
           </div>
           <button className="btn btn-primary" type="button" onClick={() => setModalOpen(true)}>
@@ -254,9 +303,9 @@ function TeacherCoursesPage() {
           <div style={{ marginTop: 28 }}>
             {Object.entries(groups).map(([label, list]) => (
               <div key={label} style={{ marginBottom: 28 }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 14 }}>
-                  <h2 style={{ fontSize: 14, fontWeight: 700, color: "var(--zinc-900)" }}>{label}</h2>
-                  <span style={{ fontSize: 12, color: "var(--zinc-500)" }}>담당 {list.length}과목</span>
+                <div className="course-section-head">
+                  <h2>{label}</h2>
+                  <span>담당 {list.length}과목</span>
                 </div>
                 <div className="course-grid">
                   {list.map((course) => {
@@ -265,43 +314,51 @@ function TeacherCoursesPage() {
                     return (
                       <div
                         key={course.id}
-                        className="course-card"
+                        className={`course-card teacher-course-card ${status}`}
                         role="button"
                         tabIndex={0}
                         onClick={() => handleCardClick(course)}
                         onKeyDown={(e) => e.key === "Enter" && handleCardClick(course)}
-                        style={{ cursor: "pointer", position: "relative" }}
                       >
-                        <div>
-                          <div className="title">{course.title}</div>
-                          <div className="term">
-                            {[course.department, course.schedule].filter(Boolean).join(" · ")}
-                          </div>
-                        </div>
-                        {STATUS_PILL[status] || STATUS_PILL.idle}
-                        <div className="meta">
-                          <span className="key">
-                            수강생 {course.student_count}명 · {lectureCount}개 수업
-                          </span>
-                          <span style={{ color: "var(--brand-deep)", fontWeight: 600 }}>
-                            {CTA_LABEL[status] || CTA_LABEL.idle}
-                          </span>
-                        </div>
                         <button
+                          className="teacher-course-delete"
                           type="button"
                           title="강의 삭제"
+                          aria-label={`${course.title} 강의 삭제`}
                           onClick={(e) => { e.stopPropagation(); setDeleteTarget(course); }}
-                          style={{
-                            position: "absolute", bottom: 10, right: 10,
-                            background: "none", border: "none", cursor: "pointer",
-                            color: "var(--zinc-300)", padding: "4px", borderRadius: 5,
-                            display: "flex", alignItems: "center", lineHeight: 1, transition: "color .15s",
-                          }}
-                          onMouseEnter={(e) => { e.currentTarget.style.color = "#ef4444"; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.color = "var(--zinc-300)"; }}
                         >
-                          <Trash2 size={13} />
+                          <Trash2 size={14} />
                         </button>
+
+                        <div className="teacher-course-card-top">
+                          <div className="teacher-course-icon">
+                            <img src={sungshinLogo} alt="" aria-hidden="true" />
+                          </div>
+                          {STATUS_PILL[status] || STATUS_PILL.idle}
+                        </div>
+
+                        <div className="teacher-course-card-body">
+                          <div className="title">{course.title}</div>
+                          <div className="term">
+                            {[course.department, course.schedule].filter(Boolean).join(" · ") || "강의 정보 없음"}
+                          </div>
+                        </div>
+
+                        <div className="meta teacher-course-card-meta">
+                          <div className="teacher-course-card-stats">
+                            <span>
+                              <UsersRound size={14} />
+                              수강생 {course.student_count ?? 0}명
+                            </span>
+                            <span>
+                              <BookOpen size={14} />
+                              {lectureCount}개 수업
+                            </span>
+                          </div>
+                          <div className="teacher-course-card-actions">
+                            <strong>{CTA_LABEL[status] || CTA_LABEL.idle}</strong>
+                          </div>
+                        </div>
                       </div>
                     );
                   })}

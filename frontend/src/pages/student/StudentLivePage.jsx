@@ -60,7 +60,6 @@ function StudentLivePage() {
   const [showChatbot, setShowChatbot] = useState(false);
   const [chatbotInput, setChatbotInput] = useState("");
   const [recentQuestion, setRecentQuestion] = useState(null);
-  const [classEnded, setClassEnded] = useState(false);
   const [liveWeek, setLiveWeek] = useState(5);
   const [liveCourseName, setLiveCourseName] = useState("자료구조론");
   const liveWeekRef = useRef(5);
@@ -75,6 +74,19 @@ function StudentLivePage() {
   const backendSetIdRef = useRef(null);
   // LECTURE_CHANGED 수신 시 true → 이후 PDF_LOADED 무시 (이전 세션 탭 오염 방지)
   const sessionInvalidatedRef = useRef(false);
+
+  const goToReview = useCallback((options = {}) => {
+    const targetLectureId = lectureIdRef.current;
+    if (!targetLectureId) {
+      navigate("/student/courses", options);
+      return;
+    }
+
+    navigate("/student/review", {
+      ...options,
+      state: { lectureId: targetLectureId },
+    });
+  }, [navigate]);
 
   useEffect(() => { activeSetRef.current = activeSet; }, [activeSet]);
   useEffect(() => { choicesRef.current = choices; }, [choices]);
@@ -175,7 +187,9 @@ function StudentLivePage() {
       }
     }
 
-    if (msg.type === "CLASS_ENDED") setClassEnded(true);
+    if (msg.type === "CLASS_ENDED") {
+      goToReview({ replace: true });
+    }
 
     // 교수 화면이 백엔드 set_id를 확인하면 학생 쪽 setId도 업데이트
     if (msg.type === "QUIZ_SET_BACKEND_ID") {
@@ -203,10 +217,9 @@ function StudentLivePage() {
         setChoices({});
         setSubmitted(false);
         setQuizClosed(false);
-        setClassEnded(false);
       }
     }
-  }, []);
+  }, [goToReview]);
 
   const emit = useLectureRealtime("quizsync-v2", lectureId, handleMessage);
 
@@ -226,7 +239,10 @@ function StudentLivePage() {
 
     getLecture(lectureId)
       .then((lecture) => {
-        if (lecture?.status === "ENDED") setClassEnded(true);
+        if (lecture?.status === "ENDED") {
+          goToReview({ replace: true });
+          return null;
+        }
         if (lecture?.title) setLiveCourseName(lecture.title);
         if (!lecture?.file_name) return null;
 
@@ -237,7 +253,7 @@ function StudentLivePage() {
         });
       })
       .catch((err) => console.error("강의 자료 로드 실패:", err.message));
-  }, [lectureId, pdfData]);
+  }, [lectureId, pdfData, goToReview]);
 
   const syncVisibleQuizSet = useCallback(() => {
     if (!lectureId) return Promise.resolve();
@@ -384,7 +400,7 @@ function StudentLivePage() {
             </span>
           </div>
           <div className="right">
-            <button className="btn btn-ghost btn-sm" type="button" onClick={() => navigate("/student/review", { state: { lectureId } })}>
+            <button className="btn btn-ghost btn-sm" type="button" onClick={() => goToReview()}>
               복습
             </button>
             <button className="btn btn-ghost btn-sm" type="button" onClick={() => navigate("/student/courses")}>
@@ -608,24 +624,6 @@ function StudentLivePage() {
             <MessageCircle size={18} /> 질문하기
           </button>
         </div>
-
-        {/* Class ended overlay */}
-        {classEnded && (
-          <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,.72)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <div style={{ borderRadius: 20, padding: "40px 36px", maxWidth: 440, background: "white", textAlign: "center" }}>
-              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>수업이 종료되었습니다</div>
-              <p style={{ fontSize: 13, color: "var(--zinc-600)", marginBottom: 24 }}>복습 페이지로 이동하시겠습니까?</p>
-              <div style={{ display: "flex", gap: 10 }}>
-                <button className="btn btn-ghost" type="button" style={{ flex: 1, whiteSpace: "nowrap" }} onClick={() => setClassEnded(false)}>
-                  잠깐 더 머무르기
-                </button>
-                <button className="btn btn-primary" type="button" style={{ flex: 1, whiteSpace: "nowrap" }} onClick={() => navigate("/student/review", { state: { lectureId } })}>
-                  복습 페이지로 이동
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </RoleLayout>
   );
