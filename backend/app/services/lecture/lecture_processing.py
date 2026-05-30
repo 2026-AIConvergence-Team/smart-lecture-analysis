@@ -420,7 +420,6 @@ def analyze_page_contents_to_concepts(
 
         all_page_texts = {pn: data["text"] for pn, data in valid_pages.items()}
         all_texts_list = [data["text"] for data in valid_pages.values()]
-        page_nums = list(valid_pages.keys())
 
         # 개념명 사용 횟수 카운터
         concept_name_counter: dict[str, int] = {}
@@ -429,14 +428,16 @@ def analyze_page_contents_to_concepts(
             text = page_data["text"]
             image_paths = page_data["image_paths"]
 
-            # 1. TF-IDF로 키워드 추출
-            keywords = extract_keywords_tfidf(text, all_texts_list, top_n=10)
+            # 1. 페이지 제목 추출 (키워드 가중치에 활용)
+            title = extract_page_title(remove_headers(text))
+
+            # 2. TF-IDF + 제목 가중치로 키워드 추출
+            keywords = extract_keywords_tfidf(text, all_texts_list, top_n=10, page_title=title)
 
             if not keywords:
                 continue
 
-            # 2. 페이지 제목 추출, 없으면 키워드 1위로 개념명 생성
-            title = extract_page_title(remove_headers(text))
+            # 3. 개념명 결정 — 제목 없으면 키워드 1위로 대체
             base_name = (title if title else keywords[0])[:30]
 
             if not base_name:
@@ -447,11 +448,11 @@ def analyze_page_contents_to_concepts(
             concept_name_counter[base_name] = count
             concept_name = base_name if count == 1 else f"{base_name} ({count})"
 
-            # 3. 핵심 문장 추출
+            # 4. 핵심 문장 추출
             original_text = remove_headers(text)
             sentences = extract_key_sentences(original_text, keywords, top_k=2)
 
-            # 4. 이미지가 있는 경우 Vision AI로 설명 생성 (모든 이미지 처리)
+            # 5. 이미지가 있는 경우 Vision AI로 설명 생성
             image_descriptions = []
             if image_paths:
                 context_text = _build_context_text(page_num, all_page_texts)
