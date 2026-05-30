@@ -75,7 +75,7 @@ def get_teacher_report(
             "LECTURE_NOT_ENDED",
         )
 
-    # 1. 세트 목록 조회 (DRAFT = 폐기/미출제 제외, SENT/CLOSED만 포함)
+    # 1. 세트 목록 조회
     all_sets = quiz_set_repository.get_quiz_sets_by_lecture(db, lecture_id)
     quiz_sets = [s for s in all_sets if s.status in ("SENT", "CLOSED")]
     if not quiz_sets:
