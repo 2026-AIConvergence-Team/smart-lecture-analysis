@@ -76,7 +76,8 @@ def get_teacher_report(
         )
 
     # 1. 세트 목록 조회
-    quiz_sets = quiz_set_repository.get_quiz_sets_by_lecture(db, lecture_id)
+    all_sets = quiz_set_repository.get_quiz_sets_by_lecture(db, lecture_id)
+    quiz_sets = [s for s in all_sets if s.status in ("SENT", "CLOSED")]
     if not quiz_sets:
         return schemas.TeacherReportResponse(
             lecture_id=lecture_id,
@@ -233,7 +234,7 @@ def get_teacher_report(
             content=q.content,
             created_at=q.created_at,
         )
-        for q in anon_questions
+        for q, _ in anon_questions
     ]
 
     # 5. 참여 학생 수 계산 (중복 제거)
