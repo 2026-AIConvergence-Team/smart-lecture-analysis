@@ -193,6 +193,7 @@ function TeacherSetupPage() {
       page_start: rangeStart,
       page_end: rangeEnd,
       quiz_type: "MIXED",
+      selected_keywords: selectedKeywords,
       ...(conceptIds.length > 0 && { concept_ids: conceptIds }),
     };
 
