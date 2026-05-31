@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Sparkles, Zap, AlertCircle, Send, CheckCircle2, Pencil, Trash2, Plus, RotateCcw } from "lucide-react";
+import { Sparkles, Zap, AlertCircle, Send, CheckCircle2, Pencil, Trash2, Plus, RotateCcw, ChevronLeft } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import PdfViewer from "../../components/PdfViewer.jsx";
-import { keywordsFor, quizFromKeyword, botCounts, BOT_RESP, SAMPLE_QUESTIONS } from "../../data/quizSyncMock.js";
+import { BOT_RESP } from "../../data/quizSyncMock.js";
 import useLectureRealtime from "../../hooks/useLectureRealtime.js";
 import { appendQuestionCache, getQuestionsCache, setPdfCache, setQuizSets, setCourseInfo, getPdfCache } from "../../data/sessionCache.js";
 import { generateQuizzes, getQuizGenerateStatus, getConcepts, getLectureQuizzes, deleteQuiz, createManualQuiz, updateQuiz, getQuizDetail, getLecture, updateLectureStatus, getQuizSets, getQuizSetReport, updateQuizSetStatus, regenerateQuiz, getQuestions, downloadLecturePdf, generateClassCode } from "../../api/lectureApi.js";
@@ -116,8 +116,11 @@ function TeacherLivePage() {
   const navigate = useNavigate();
   const {
     code: initialCode = "",
+    courseId = null,
     courseName = "자료구조론",
+    courseMeta = "",
     week = 5,
+    lectureTitle = "",
     pdfFileName = null,
     pdfTotal = 8,
     currentQuizSet = [],
@@ -144,6 +147,7 @@ function TeacherLivePage() {
   const [extractedKeywords, setExtractedKeywords] = useState([]);
   const [selectedKeywords, setSelectedKeywords] = useState([]);
   const [keywordConceptMap, setKeywordConceptMap] = useState({}); // keyword → concept_id
+  const [keywordNotice, setKeywordNotice] = useState("");
   const [quizDraft, setQuizDraft] = useState(() =>
     (currentQuizSet || []).map((q, i) =>
       q.quiz_id !== undefined
@@ -180,6 +184,42 @@ function TeacherLivePage() {
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [codeExpiresAt, setCodeExpiresAt] = useState(null);
   const [codeRemaining, setCodeRemaining] = useState(0);
+
+  const getSafeRange = () => {
+    const start = Math.max(1, Number(rangeStart) || 1);
+    const end = Math.max(1, Number(rangeEnd) || start);
+    return start <= end ? { start, end } : { start: end, end: start };
+  };
+
+  const handleRangeInput = (setter) => (event) => {
+    const value = event.target.value;
+    if (value === "") {
+      setter("");
+      return;
+    }
+    setter(Math.max(1, Number(value)));
+  };
+
+  const handleRangeBlur = (setter) => () => {
+    setter((value) => Math.max(1, Number(value) || 1));
+  };
+
+  const handleBackToSetup = () => {
+    navigate("/teacher/setup", {
+      state: {
+        courseId,
+        courseName,
+        courseMeta,
+        week,
+        lectureTitle,
+        lectureId,
+        classCode: liveCode,
+        pdfFileName,
+        pdfTotal: totalPages,
+        currentQuizSet,
+      },
+    });
+  };
 
   // class-mode hides sidebar and slims topbar
   useEffect(() => {
@@ -482,15 +522,22 @@ function TeacherLivePage() {
   }, [sets]);
 
   const handleExtractKeywords = () => {
+    const { start, end } = getSafeRange();
+
     if (!lectureId || concepts.length === 0) {
-      // fallback: lectureId 없거나 아직 개념 로드 전
-      setExtractedKeywords(keywordsFor(rangeStart, rangeEnd));
+      setKeywordNotice(
+        !lectureId
+          ? "선택된 수업이 없어 키워드를 추출할 수 없습니다."
+          : "분석된 키워드가 아직 없습니다. PDF 분석이 완료된 뒤 다시 시도해 주세요."
+      );
+      setKeywordConceptMap({});
+      setExtractedKeywords([]);
       setSelectedKeywords([]);
       return;
     }
     // page_num 기준 범위 필터 (없으면 전체)
     const filtered = concepts.filter(
-      (c) => !c.page_num || (c.page_num >= rangeStart && c.page_num <= rangeEnd)
+      (c) => !c.page_num || (c.page_num >= start && c.page_num <= end)
     );
     const list = filtered.length > 0 ? filtered : concepts;
 
@@ -570,6 +617,7 @@ function TeacherLivePage() {
     setKeywordConceptMap(map);
     setExtractedKeywords(kwList);
     setSelectedKeywords([]);
+    setKeywordNotice(kwList.length > 0 ? "" : "선택한 페이지 범위에서 추출된 키워드가 없습니다.");
   };
 
   const handleToggleKeyword = (keyword) => {
@@ -584,13 +632,11 @@ function TeacherLivePage() {
     if (selectedKeywords.length === 0) return;
 
     if (!lectureId) {
-      // fallback
-      const quiz = selectedKeywords.map((kw, i) => quizFromKeyword(kw, i));
-      setQuizDraft(quiz);
-      setExtractedKeywords([]);
-      setSelectedKeywords([]);
+      setQuizError("선택된 수업이 없어 퀴즈를 생성할 수 없습니다.");
       return;
     }
+
+    const { start, end } = getSafeRange();
 
     setQuizError("");
 
@@ -607,8 +653,8 @@ function TeacherLivePage() {
 
     setLoadingQuiz(true);
     generateQuizzes(lectureId, {
-      page_start: rangeStart,
-      page_end: rangeEnd,
+      page_start: start,
+      page_end: end,
       quiz_type: "MIXED",
       selected_keywords: selectedKeywords,
       ...(conceptIds.length > 0 && { concept_ids: conceptIds }),
@@ -808,8 +854,9 @@ const handlePublishQuiz = async () => {
     initialCounts[q.id] = new Array(q.choices?.length || 4).fill(0);
   });
 
+  const { start: publishRangeStart, end: publishRangeEnd } = getSafeRange();
   const pdfRange =
-    rangeStart === rangeEnd ? `p.${rangeStart}` : `p.${rangeStart}-${rangeEnd}`;
+    publishRangeStart === publishRangeEnd ? `p.${publishRangeStart}` : `p.${publishRangeStart}-${publishRangeEnd}`;
 
   const newSet = {
     id,
@@ -817,7 +864,7 @@ const handlePublishQuiz = async () => {
     idx: sets.length + 1,
     status: "active",
     createdAt: new Date().toLocaleTimeString("ko-KR"),
-    startPage: rangeStart,
+    startPage: publishRangeStart,
     pdfRange,
     questions: quizDraft,
     counts: initialCounts,
@@ -830,7 +877,7 @@ const handlePublishQuiz = async () => {
   emit("QUIZ_PUBLISHED", {
     setId: id,
     questions: quizDraft,
-    startPage: rangeStart,
+    startPage: publishRangeStart,
     pdfRange,
   });
 
@@ -949,6 +996,10 @@ const handlePublishQuiz = async () => {
             <span className="pill pill-brand">
               {courseName} {week}주차
             </span>
+            <button className="btn btn-ghost btn-sm" type="button" onClick={handleBackToSetup}>
+              <ChevronLeft size={14} />
+              뒤로
+            </button>
             <span>
               학생 <strong>{joinCount}</strong>명 접속 중
             </span>
@@ -1086,7 +1137,8 @@ const handlePublishQuiz = async () => {
                               className="input"
                               min="1"
                               value={rangeStart}
-                              onChange={(e) => setRangeStart(Number(e.target.value))}
+                              onChange={handleRangeInput(setRangeStart)}
+                              onBlur={handleRangeBlur(setRangeStart)}
                             />
                             <div style={{ textAlign: "center", color: "var(--zinc-400)" }}>—</div>
                             <input
@@ -1094,7 +1146,8 @@ const handlePublishQuiz = async () => {
                               className="input"
                               min="1"
                               value={rangeEnd}
-                              onChange={(e) => setRangeEnd(Number(e.target.value))}
+                              onChange={handleRangeInput(setRangeEnd)}
+                              onBlur={handleRangeBlur(setRangeEnd)}
                             />
                           </div>
                           <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
@@ -1123,7 +1176,7 @@ const handlePublishQuiz = async () => {
                               type="button"
                               onClick={() => {
                                 setRangeStart(1);
-                                setRangeEnd(totalPages);
+                                setRangeEnd(Math.max(1, totalPages || 1));
                               }}
                             >
                               전체
@@ -1284,6 +1337,12 @@ const handlePublishQuiz = async () => {
                               </button>
                             </div>
                           </div>
+                        )}
+
+                        {keywordNotice && (
+                          <p style={{ marginTop: 12, fontSize: 12, color: "var(--zinc-500)", lineHeight: 1.5 }}>
+                            {keywordNotice}
+                          </p>
                         )}
 
                         {extractedKeywords.length > 0 && (

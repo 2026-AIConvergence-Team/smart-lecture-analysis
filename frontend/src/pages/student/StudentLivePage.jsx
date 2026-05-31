@@ -1,11 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { LogOut, MessageCircle, Send } from "lucide-react";
+import { ChevronLeft, LogOut, MessageCircle, Save, Send } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import PdfViewer from "../../components/PdfViewer.jsx";
 import useLectureRealtime from "../../hooks/useLectureRealtime.js";
 import { appendQuestionCache, clearPdfCache, setPdfCache } from "../../data/sessionCache.js";
-import { downloadLecturePdf, getLecture, getLectureQuizzes, submitAnswers, submitQuestion } from "../../api/lectureApi.js";
+import {
+  createMemo,
+  downloadLecturePdf,
+  getLecture,
+  getLectureQuizzes,
+  submitAnswers,
+  submitQuestion,
+  updateMemo,
+} from "../../api/lectureApi.js";
 
 function saveMemoToStorage(key, text) {
   try { localStorage.setItem(key, text); } catch {}
@@ -57,6 +65,8 @@ function StudentLivePage() {
   const [submitted, setSubmitted] = useState(false);
   const [quizClosed, setQuizClosed] = useState(false); // teacher revealed answers
   const [memos, setMemos] = useState({});           // { [qid]: string }
+  const [memoSaving, setMemoSaving] = useState({});  // { [qid]: boolean }
+  const [memoStatus, setMemoStatus] = useState({});  // { [qid]: string }
   const [showChatbot, setShowChatbot] = useState(false);
   const [chatbotInput, setChatbotInput] = useState("");
   const [recentQuestion, setRecentQuestion] = useState(null);
@@ -69,6 +79,7 @@ function StudentLivePage() {
   const choicesRef = useRef({});
   const quizClosedRef = useRef(false);
   const savedSetsRef = useRef([]); // accumulates closed sets for review
+  const memoStateRef = useRef({}); // { [qid]: "none" | "exists" }
   const setCounterRef = useRef(0);
   // QUIZ_SET_BACKEND_ID 수신 시 즉시(동기) 저장 → handleSubmit race condition 방지
   const backendSetIdRef = useRef(null);
@@ -352,7 +363,39 @@ function StudentLivePage() {
 
   const handleMemoChange = (qid, text) => {
     setMemos((prev) => ({ ...prev, [qid]: text }));
+    setMemoStatus((prev) => ({ ...prev, [qid]: "" }));
     saveMemoToStorage(`quizsync-memo-${liveWeek}-${qid}`, text);
+  };
+
+  const handleMemoSave = async (qid) => {
+    const content = memos[qid] || "";
+    const state = memoStateRef.current[qid] || "none";
+
+    if (state !== "exists" && !content.trim()) {
+      setMemoStatus((prev) => ({ ...prev, [qid]: "메모를 입력한 뒤 저장해 주세요." }));
+      return;
+    }
+
+    setMemoSaving((prev) => ({ ...prev, [qid]: true }));
+    setMemoStatus((prev) => ({ ...prev, [qid]: "" }));
+
+    try {
+      if (state === "exists") {
+        await updateMemo(qid, content);
+      } else {
+        try {
+          await createMemo(qid, content);
+        } catch (err) {
+          await updateMemo(qid, content);
+        }
+        memoStateRef.current = { ...memoStateRef.current, [qid]: "exists" };
+      }
+      setMemoStatus((prev) => ({ ...prev, [qid]: "저장됨" }));
+    } catch (err) {
+      setMemoStatus((prev) => ({ ...prev, [qid]: err.message || "저장에 실패했습니다." }));
+    } finally {
+      setMemoSaving((prev) => ({ ...prev, [qid]: false }));
+    }
   };
 
   const handleSendQuestion = () => {
@@ -392,6 +435,10 @@ function StudentLivePage() {
         {/* Status bar */}
         <div className="live-statusbar" style={{ marginBottom: 12 }}>
           <div className="left">
+            <button className="btn btn-ghost btn-sm" type="button" onClick={() => navigate("/student/courses")}>
+              <ChevronLeft size={14} />
+              뒤로
+            </button>
             <span className="pill pill-brand" style={{ fontSize: 12 }}>
               {liveCourseName} {liveWeek}주차
             </span>
@@ -541,6 +588,20 @@ function StudentLivePage() {
                             value={memos[q.id] || ""}
                             onChange={(e) => handleMemoChange(q.id, e.target.value)}
                           />
+                          <div className="postit-actions">
+                            <span className={`postit-status ${memoStatus[q.id] === "저장됨" ? "success" : ""}`}>
+                              {memoStatus[q.id] || ""}
+                            </span>
+                            <button
+                              className="btn btn-soft btn-sm"
+                              type="button"
+                              disabled={memoSaving[q.id] || (!(memos[q.id] || "").trim() && memoStateRef.current[q.id] !== "exists")}
+                              onClick={() => handleMemoSave(q.id)}
+                            >
+                              <Save size={13} />
+                              {memoSaving[q.id] ? "저장 중" : memoStateRef.current[q.id] === "exists" ? "수정" : "저장"}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );

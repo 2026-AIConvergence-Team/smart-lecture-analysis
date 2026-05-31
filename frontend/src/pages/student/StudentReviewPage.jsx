@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { ChevronLeft, ChevronRight, FileText } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileText, Save } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import PdfViewer from "../../components/PdfViewer.jsx";
@@ -28,6 +28,8 @@ function StudentReviewPage() {
   const [activeSetIdx, setActiveSetIdx] = useState(0);
   const [filterMode, setFilterMode] = useState("all");
   const [memos, setMemos] = useState({});
+  const [memoSaving, setMemoSaving] = useState({});
+  const [memoStatus, setMemoStatus] = useState({});
   // quiz_id → "none" | "exists" (서버에 메모가 있는지 여부)
   const memoStateRef = useRef({});
 
@@ -144,6 +146,7 @@ function StudentReviewPage() {
           });
         });
         setMemos(initMemos);
+        setMemoStatus({});
         memoStateRef.current = initMemoState;
       })
       .catch((err) => setReviewError(err.message))
@@ -174,23 +177,39 @@ function StudentReviewPage() {
     };
   }, [activeLectureId]);
 
-  // 메모 변경 핸들러 (blur 시 서버 저장)
   const handleMemoChange = (quizId, text) => {
     setMemos((prev) => ({ ...prev, [quizId]: text }));
+    setMemoStatus((prev) => ({ ...prev, [quizId]: "" }));
   };
 
-  const handleMemoBlur = async (quizId) => {
+  const handleMemoSave = async (quizId) => {
     const content = memos[quizId] || "";
-    const state = memoStateRef.current[quizId];
+    const state = memoStateRef.current[quizId] || "none";
+
+    if (state !== "exists" && !content.trim()) {
+      setMemoStatus((prev) => ({ ...prev, [quizId]: "메모를 입력한 뒤 저장해 주세요." }));
+      return;
+    }
+
+    setMemoSaving((prev) => ({ ...prev, [quizId]: true }));
+    setMemoStatus((prev) => ({ ...prev, [quizId]: "" }));
+
     try {
       if (state === "exists") {
         await updateMemo(quizId, content);
       } else {
-        await createMemo(quizId, content);
+        try {
+          await createMemo(quizId, content);
+        } catch (err) {
+          await updateMemo(quizId, content);
+        }
         memoStateRef.current = { ...memoStateRef.current, [quizId]: "exists" };
       }
+      setMemoStatus((prev) => ({ ...prev, [quizId]: "저장됨" }));
     } catch (err) {
-      console.error("메모 저장 실패:", err.message);
+      setMemoStatus((prev) => ({ ...prev, [quizId]: err.message || "저장에 실패했습니다." }));
+    } finally {
+      setMemoSaving((prev) => ({ ...prev, [quizId]: false }));
     }
   };
 
@@ -423,8 +442,21 @@ function StudentReviewPage() {
                             placeholder="메모를 남겨두세요..."
                             value={memos[quiz.quiz_id] || ""}
                             onChange={(e) => handleMemoChange(quiz.quiz_id, e.target.value)}
-                            onBlur={() => handleMemoBlur(quiz.quiz_id)}
                           />
+                          <div className="postit-actions">
+                            <span className={`postit-status ${memoStatus[quiz.quiz_id] === "저장됨" ? "success" : ""}`}>
+                              {memoStatus[quiz.quiz_id] || ""}
+                            </span>
+                            <button
+                              className="btn btn-soft btn-sm"
+                              type="button"
+                              disabled={memoSaving[quiz.quiz_id] || (!(memos[quiz.quiz_id] || "").trim() && memoStateRef.current[quiz.quiz_id] !== "exists")}
+                              onClick={() => handleMemoSave(quiz.quiz_id)}
+                            >
+                              <Save size={13} />
+                              {memoSaving[quiz.quiz_id] ? "저장 중" : memoStateRef.current[quiz.quiz_id] === "exists" ? "수정" : "저장"}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );

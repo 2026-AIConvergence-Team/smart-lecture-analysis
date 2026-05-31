@@ -17,6 +17,8 @@ import {
 import RoleLayout from "../../components/RoleLayout.jsx";
 import { getCourseLectures, getCourses } from "../../api/courseApi.js";
 import { joinLectureByCode } from "../../api/lectureApi.js";
+import studentIcon from "../../assets/ph--student.svg";
+import sungshinLogo from "../../assets/sungshin_logo.svg";
 
 const STATUS_VIEW = {
   active: {
@@ -322,13 +324,14 @@ function StudentCoursesPage() {
   const renderCourseCard = (course) => {
     const lectures = lecturesByCourse[course.id] || course.lectures || [];
     const summary = getCourseLectureSummary(lectures);
-    const courseInitial = String(course.title || "강의").trim().slice(0, 1);
     const actionLabel = summary.activeCount > 0 ? "진행 중" : summary.endedCount === summary.total && summary.total > 0 ? "복습" : "열어보기";
 
     return (
       <button key={course.id} className="course-card student-course-card" type="button" onClick={() => handleCourseClick(course)}>
         <div className="student-course-card-top">
-          <div className="student-course-icon" aria-hidden="true">{courseInitial}</div>
+          <div className="student-course-icon" aria-hidden="true">
+            <img className="student-profile-icon" src={studentIcon} alt="" />
+          </div>
           <span className="student-course-status pill pill-success">
             <BookOpen size={13} />
             수강 중
@@ -365,7 +368,7 @@ function StudentCoursesPage() {
       <article className={`lecture-card student-lecture-card ${status}`} key={getLectureId(lecture) || `${lecture.title}-${index}`}>
         <div className="lecture-card-top">
           <div className="lecture-number">
-            <span>{lectureNo}</span>
+            <img className="student-profile-icon" src={studentIcon} alt="" aria-hidden="true" />
           </div>
           <span className={`pill ${view.pill}`}>
             <StatusIcon size={13} />
@@ -471,7 +474,9 @@ function StudentCoursesPage() {
         {!loading && !error && activeCourse && (
           <>
             <div className="lecture-course-band">
-              <div className="lecture-course-mark">{activeCourse.title.slice(0, 2)}</div>
+              <div className="lecture-course-mark" aria-hidden="true">
+                <img src={sungshinLogo} alt="" />
+              </div>
               <div className="lecture-course-info">
                 <strong>{activeCourse.title}</strong>
                 <span>
