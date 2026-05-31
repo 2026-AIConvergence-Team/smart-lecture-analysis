@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight, AlertTriangle, AlignJustify } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import { getCourses, getCourseLectures } from "../../api/courseApi.js";
@@ -24,6 +24,7 @@ function cleanConceptName(name) {
 
 function TeacherReportPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const locationLectureId = location.state?.lectureId ? Number(location.state.lectureId) : null;
 
   const [courses, setCourses] = useState([]);
@@ -69,23 +70,6 @@ function TeacherReportPage() {
       .finally(() => setCoursesLoading(false));
   }, []);
 
-  // 강의 변경 시 해당 과목의 수업 목록 로드
-  const handleCourseChange = async (courseId) => {
-    const numId = Number(courseId);
-    setActiveCourseId(numId);
-    setReport(null);
-    setReportError("");
-    setActiveSetIdx(0);
-    if (!lecturesByCourse[numId]) {
-      const lectures = await getCourseLectures(numId).catch(() => []);
-      setLecturesByCourse((prev) => ({ ...prev, [numId]: lectures }));
-      setActiveLectureIdx(lectures.length > 0 ? lectures.length - 1 : 0);
-    } else {
-      const lectures = lecturesByCourse[numId] || [];
-      setActiveLectureIdx(lectures.length > 0 ? lectures.length - 1 : 0);
-    }
-  };
-
   const activeLectures = (activeCourseId ? lecturesByCourse[activeCourseId] : null) || [];
   const activeLecture = activeLectures[activeLectureIdx] || null;
   const activeLectureId = activeLecture?.id ?? activeLecture?.lecture_id ?? null;
@@ -116,17 +100,11 @@ function TeacherReportPage() {
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 18, marginBottom: 22 }}>
           <div>
             <div className="review-eyebrow-row">
+              <button className="review-back-button" type="button" onClick={() => navigate("/teacher/courses")}>
+                <ChevronLeft size={14} />
+                수업 목록
+              </button>
               <p className="eyebrow">Weekly Report</p>
-              <label className="review-course-picker">
-                <span>강의</span>
-                <select value={activeCourseId || ""} onChange={(e) => handleCourseChange(e.target.value)}>
-                  {courses.map((course) => (
-                    <option key={course.id} value={course.id}>
-                      {course.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
             </div>
             <h1 className="page-title">
               {activeCourse?.title || "강의"} — 수업 리포트

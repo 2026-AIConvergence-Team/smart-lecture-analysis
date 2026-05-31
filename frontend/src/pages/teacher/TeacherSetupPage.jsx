@@ -1,21 +1,17 @@
-import { useState, useEffect } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
-import { CloudUpload, ChevronLeft, Play, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { ChevronLeft, CloudUpload, Copy, Play, QrCode, Ticket, Trash2 } from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
-import { keywordsFor, quizFromKeyword, SAMPLE_QUESTIONS } from "../../data/quizSyncMock.js";
-import { setPdfCache, clearSession } from "../../data/sessionCache.js";
-import { createLecture, uploadPdf, analyzePdf, getConcepts, generateQuizzes, getQuizGenerateStatus, generateClassCode, updateLectureStatus } from "../../api/lectureApi.js";
+import { clearSession, setPdfCache } from "../../data/sessionCache.js";
+import {
+  analyzePdf,
+  createLecture,
+  generateClassCode,
+  getConcepts,
+  updateLectureStatus,
+  uploadPdf,
+} from "../../api/lectureApi.js";
 import useBroadcastChannel from "../../hooks/useBroadcastChannel.js";
-
-const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
-function genCode() {
-  let code = "";
-  for (let i = 0; i < 6; i++) {
-    code += CHARS.charAt(Math.floor(Math.random() * CHARS.length));
-  }
-  return code;
-}
 
 function estimatePdfPages(data) {
   try {
@@ -30,198 +26,166 @@ function estimatePdfPages(data) {
 function TeacherSetupPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const courseId   = location.state?.courseId   || null;
-  const courseName = location.state?.courseName || "자료구조론";
-  const week       = location.state?.week       || 5;
-  const courseMeta = location.state?.courseMeta || "2025-1 / 월,수,금";
+  const courseId = location.state?.courseId || null;
+  const courseName = location.state?.courseName || "강의";
+  const week = location.state?.week || 1;
+  const courseMeta = location.state?.courseMeta || "";
+  const lectureTitle = location.state?.lectureTitle?.trim() || `${courseName} ${week}주차`;
+  const existingLectureId = location.state?.lectureId || null;
+  const initialClassCode = location.state?.classCode || "";
+  const initialPdfFileName = location.state?.pdfFileName || null;
+  const initialPdfTotal = location.state?.pdfTotal || 8;
 
-  // BroadcastChannel — 새 세션 시작 알림용 (학생 이전 PDF 초기화)
   const emit = useBroadcastChannel("quizsync-v2");
+  const createdRef = useRef(false);
 
-  // 상태 관리
-  const [lectureId, setLectureId] = useState(null);   // DB에 생성된 강의 ID
-  const [pdfFile, setPdfFile] = useState(null);        // 서버 업로드용 File 객체
-  const [code, setCode] = useState(genCode());
+  const [lectureId, setLectureId] = useState(existingLectureId);
+  const [lectureError, setLectureError] = useState("");
+  const [code, setCode] = useState(initialClassCode);
+  const [issuingCode, setIssuingCode] = useState(false);
   const [joinCount, setJoinCount] = useState(0);
-  const [pdfFileName, setPdfFileName] = useState(null);
-  const [pdfMeta, setPdfMeta] = useState(null);
-  const [pdfReady, setPdfReady] = useState(false);
+
+  const [pdfFile, setPdfFile] = useState(null);
+  const [pdfFileName, setPdfFileName] = useState(initialPdfFileName);
+  const [pdfReady, setPdfReady] = useState(Boolean(initialPdfFileName));
   const [pdfUploadError, setPdfUploadError] = useState(null);
-  const [concepts, setConcepts] = useState([]);               // 서버에서 받은 전체 개념 목록 (concept_id 포함)
-  const [pdfPage, setPdfPage] = useState(1);
-  const [pdfTotal, setPdfTotal] = useState(8);
-  const [rangeStart, setRangeStart] = useState(1);
-  const [rangeEnd, setRangeEnd] = useState(3);
-  const [extractedKeywords, setExtractedKeywords] = useState([]);
-  const [selectedKeywords, setSelectedKeywords] = useState([]);
+  const [pdfTotal, setPdfTotal] = useState(initialPdfTotal);
   const [currentQuizSet, setCurrentQuizSet] = useState([]);
 
-  // 현재 스텝 계산
-  const currentStep = pdfFileName ? 3 : joinCount > 0 ? 2 : 1;
-
-  // 페이지 열리자마자 강의 생성 API 호출 → lecture_id 저장
   useEffect(() => {
-    const today = new Date();
-    const date = today.toISOString().split("T")[0];          // "2026-05-24"
-    const time = today.toTimeString().slice(0, 5);            // "10:30"
-    const title = `${courseName} ${week}주차`;
+    if (createdRef.current) return;
+    createdRef.current = true;
 
-    createLecture({ title, date, time, ...(courseId && { course_id: courseId }) })
+    if (existingLectureId) {
+      emit("LECTURE_CHANGED", { lectureId: existingLectureId });
+      return;
+    }
+
+    const today = new Date();
+    const date = today.toISOString().split("T")[0];
+    const time = today.toTimeString().slice(0, 5);
+
+    createLecture({ title: lectureTitle, date, time, ...(courseId && { course_id: courseId }) })
       .then((data) => {
         const id = data.lecture_id ?? data.id;
         setLectureId(id);
-        // 이전 세션에 남아있는 학생 탭에게 새 강의 시작을 알려 PDF 초기화
         emit("LECTURE_CHANGED", { lectureId: id });
-        if (data.class_code) {
-          setCode(data.class_code);  // 서버 발급 코드 사용
-        } else {
-          // 백엔드가 class_code=null로 생성하는 경우 자동으로 코드 발급
-          return generateClassCode(id).then((res) => {
-            if (res?.class_code) setCode(res.class_code);
-          });
-        }
       })
-      .catch((err) => console.error("강의 생성 실패:", err));
-  }, []);
+      .catch((err) => {
+        setLectureError(err.message || "강의를 생성하지 못했습니다.");
+        console.error("강의 생성 실패:", err);
+      });
+  }, [courseId, emit, existingLectureId, lectureTitle]);
 
-  // lectureId와 pdfFile 둘 다 준비되면:
-  // PDF 업로드 → 텍스트 추출 → 개념 추출 → 개념 목록 조회 (순서대로, 모두 동기)
   useEffect(() => {
     if (!lectureId || !pdfFile) return;
 
     uploadPdf(lectureId, pdfFile)
       .then((data) => {
+        if (data?.file_name) setPdfFileName(data.file_name);
         if (data?.total_pages) setPdfTotal(data.total_pages);
-        return analyzePdf(lectureId);                // 텍스트 추출 + 개념 추출 (통합, 동기)
+        return analyzePdf(lectureId);
       })
-      .then(() => getConcepts(lectureId))            // 개념 목록 조회
-      .then((res) => {
-        const list = res.concepts || [];
-        setConcepts(list);
-        setExtractedKeywords(list.map((c) => c.concept_name));  // 키워드 태그 UI 업데이트
-      })
+      .then(() => getConcepts(lectureId))
       .catch((err) => {
-        setPdfUploadError(err.message || "처리 중 오류가 발생했습니다.");
+        setPdfUploadError(err.message || "PDF 처리 중 오류가 발생했습니다.");
       });
   }, [lectureId, pdfFile]);
 
   useEffect(() => {
+    if (!code) return undefined;
+
     const interval = setInterval(() => {
       setJoinCount((prev) => Math.min(prev + Math.floor(Math.random() * 3), 32));
     }, 2000);
     return () => clearInterval(interval);
-  }, []);
-
-  const handlePdfUpload = (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    processPdfFile(file);
-  };
+  }, [code]);
 
   const processPdfFile = (file) => {
     if (file.type !== "application/pdf") {
       alert("PDF 파일만 업로드 가능합니다.");
       return;
     }
+
     setPdfFileName(file.name);
-    setPdfMeta({ size: file.size, type: file.type });
-    setPdfPage(1);
     setPdfReady(false);
     setPdfUploadError(null);
 
-    // 바이너리 캐시 (로컬 뷰어용) → 완료되면 버튼 활성화 + 서버 업로드 트리거
     file.arrayBuffer().then((buf) => {
       const pdfBytes = new Uint8Array(buf);
       const localTotal = estimatePdfPages(pdfBytes) || 12;
       setPdfTotal(localTotal);
       setPdfCache(pdfBytes, file.name, localTotal);
-      setPdfReady(true);   // 버튼 활성화
-      setPdfFile(file);    // useEffect([lectureId, pdfFile])가 알아서 업로드 처리
+      setPdfReady(true);
+      setPdfFile(file);
     });
   };
 
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handlePdfUpload = (event) => {
+    const file = event.target.files?.[0];
+    if (file) processPdfFile(file);
   };
 
-  const handleDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const file = e.dataTransfer.files?.[0];
-    if (file) {
-      processPdfFile(file);
-    }
+  const handleDragOver = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const file = event.dataTransfer.files?.[0];
+    if (file) processPdfFile(file);
   };
 
   const handlePdfDelete = () => {
     setPdfFileName(null);
-    setPdfMeta(null);
     setPdfReady(false);
     setPdfUploadError(null);
     setPdfFile(null);
     setCurrentQuizSet([]);
-    setExtractedKeywords([]);
-    setSelectedKeywords([]);
     clearSession();
   };
 
-  const handleExtractKeywords = () => {
-    setExtractedKeywords(keywordsFor(rangeStart, rangeEnd));
-    setSelectedKeywords([]);
-  };
+  const handleIssueCode = () => {
+    if (!lectureId || issuingCode || code) return;
 
-  const handleToggleKeyword = (keyword) => {
-    setSelectedKeywords((current) => {
-      if (current.includes(keyword)) {
-        return current.filter((item) => item !== keyword);
-      }
-      if (current.length >= 5) return current;
-      return [...current, keyword];
-    });
-  };
-
-  const handleGenerateQuiz = () => {
-    if (!lectureId) return;
-
-    // 선택된 키워드 → concept_id 매핑
-    const conceptIds = selectedKeywords
-      .map((kw) => concepts.find((c) => c.concept_name === kw)?.concept_id)
-      .filter(Boolean);
-
-    const payload = {
-      page_start: rangeStart,
-      page_end: rangeEnd,
-      quiz_type: "MIXED",
-      selected_keywords: selectedKeywords,
-      ...(conceptIds.length > 0 && { concept_ids: conceptIds }),
-    };
-
-    // 퀴즈 생성(동기) → 상태 조회로 실제 퀴즈 목록 가져오기
-    generateQuizzes(lectureId, payload)
-      .then(() => getQuizGenerateStatus(lectureId))
+    setIssuingCode(true);
+    generateClassCode(lectureId)
       .then((res) => {
-        const quizList = res.quizzes || [];
-        setCurrentQuizSet(quizList);
+        if (res?.class_code) {
+          setCode(res.class_code);
+          setJoinCount(0);
+        }
       })
-      .catch((err) => console.error("퀴즈 생성 실패:", err.message));
+      .catch((err) => alert(err.message || "코드 발급에 실패했습니다."))
+      .finally(() => setIssuingCode(false));
+  };
+
+  const handleCopyCode = () => {
+    if (!code) return;
+    navigator.clipboard.writeText(code);
   };
 
   const handleStartClass = () => {
-    if (!pdfFileName) return;
-    // 강의 상태를 "active"로 변경 (실패해도 진행)
+    if (!pdfFileName || !pdfReady) return;
+
     if (lectureId) {
       updateLectureStatus(lectureId, "active").catch(() => {});
     }
+
     navigate("/teacher/live", {
+      replace: true,
       state: {
-        code,
+        code: code || "미발급",
+        courseId,
         courseName,
+        courseMeta,
         week,
         pdfFileName,
         pdfTotal,
         currentQuizSet,
-        lectureId,           // 이후 PDF 업로드·퀴즈 생성에 사용
+        lectureId,
       },
     });
   };
@@ -229,153 +193,217 @@ function TeacherSetupPage() {
   return (
     <RoleLayout role="teacher">
       <section className="content">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "24px" }}>
-        <div>
-          <p className="eyebrow">Lecture Setup</p>
-          <h1 className="page-title">{courseName} {week}주차 · 강의 설정</h1>
-          <p className="page-sub">수업 코드를 만들고 학생들이 입장한 뒤 강의자료를 업로드하면 수업을 시작할 수 있습니다.</p>
-        </div>
-        <button className="btn btn-ghost" type="button" onClick={() => navigate("/teacher/courses")}>
-          <ChevronLeft size={14} />
-          강의 목록
-        </button>
-      </div>
-
-      <div className="stepper" style={{ marginTop: "24px" }}>
-        <div className={`step ${currentStep >= 1 ? "active" : ""}`}>
-          <div className="n">1</div>
-          <div className="lbl">수업 코드</div>
-        </div>
-        <div className={`step-line ${currentStep > 1 ? "done" : ""}`}></div>
-        <div className={`step ${currentStep >= 2 ? "active" : ""}`}>
-          <div className="n">2</div>
-          <div className="lbl">학생 입장</div>
-        </div>
-        <div className={`step-line ${currentStep > 2 ? "done" : ""}`}></div>
-        <div className={`step ${currentStep >= 3 ? "active" : ""}`}>
-          <div className="n">3</div>
-          <div className="lbl">강의자료 업로드</div>
-        </div>
-        <div className={`step-line ${currentStep > 3 ? "done" : ""}`}></div>
-        <div className={`step ${currentStep >= 4 ? "active" : ""}`}>
-          <div className="n">4</div>
-          <div className="lbl">수업 시작</div>
-        </div>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1.15fr 0.85fr", gap: "18px", marginTop: "18px" }}>
-        <article className="card flow-card">
-          <div className="card-pad-lg">
-            <div style={{ marginBottom: "14px" }}>
-              <span className="eyebrow">Step 01 · 02</span>
-              <h3 style={{ fontSize: "18px", fontWeight: "700", marginTop: "4px" }}>수업 코드 발급 · 학생 입장</h3>
-              <p style={{ fontSize: "13px", color: "var(--zinc-500)", marginTop: "4px" }}>앞에 띄우면 학생들이 이 코드를 입력해 강의실에 입장합니다.</p>
-            </div>
-            <div className="class-code-stage">
-              <div className="class-code-label">CLASS CODE</div>
-              <div className="class-code-big mono" style={{ fontSize: "84px", marginTop: "14px", fontWeight: "700" }}>{code}</div>
-              <div className="class-code-actions" style={{ marginTop: "22px" }}>
-                <button className="btn btn-ghost btn-sm" type="button" onClick={() => navigator.clipboard.writeText(code)}>복사</button>
-                <button className="btn btn-ghost btn-sm" type="button" onClick={() => {
-                  if (lectureId) {
-                    generateClassCode(lectureId)
-                      .then((res) => { if (res?.class_code) setCode(res.class_code); })
-                      .catch(() => setCode(genCode()));
-                  } else {
-                    setCode(genCode());
-                  }
-                }}>코드 재생성</button>
-                <button className="btn btn-ghost btn-sm" type="button">QR 보기</button>
-              </div>
-              <div className="join-counter" style={{ marginTop: "18px" }}>
-                <span className="dot"></span> 지금 <span style={{ fontWeight: "700", color: "var(--zinc-900)" }}>{joinCount}</span>명이 입장하고 있어요
-              </div>
-            </div>
-            <p style={{ marginTop: "16px", fontSize: "12px", color: "var(--zinc-500)", textAlign: "center" }}>
-              익명 입장 기준입니다. 학생 명단은 노출되지 않으며 다음 단계와 동시에 진행할 수 있어요.
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 24 }}>
+          <div>
+            <p className="eyebrow">Lecture Setup</p>
+            <h1 className="page-title">{lectureTitle} · 강의자료 준비</h1>
+            <p className="page-sub">
+              PDF 업로드와 수업 코드 발급은 서로 독립적으로 진행됩니다. 자료를 먼저 올려도 되고, 코드를 먼저 발급해도 됩니다.
             </p>
           </div>
-        </article>
+          <button className="btn btn-ghost" type="button" onClick={() => navigate("/teacher/courses")}>
+            <ChevronLeft size={14} />
+            과목 목록
+          </button>
+        </div>
 
-        <article className="card">
-          <div className="card-head">
-            <div>
-              <div className="card-title">Step 03 · 강의자료 PDF</div>
-              <div className="card-sub">전체 PDF가 학생 화면 왼쪽에 그대로 표시됩니다.</div>
-            </div>
-            <span className="pill pill-brand">PDF only</span>
+        {lectureError && (
+          <div className="card card-pad" style={{ marginTop: 18, color: "var(--danger)" }}>
+            {lectureError}
           </div>
+        )}
 
-          <div className="card-pad">
-            <label htmlFor="pdfInput" style={{
-              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-              minHeight: "200px", borderRadius: "12px",
-              backgroundColor: "var(--brand-softer)",
-              backgroundImage: `
-                linear-gradient(var(--brand-ring) 1px, transparent 1px),
-                linear-gradient(90deg, var(--brand-ring) 1px, transparent 1px)
-              `,
-              backgroundSize: "28px 28px",
-              border: "1.5px dashed var(--brand-2)",
-              cursor: "pointer", textAlign: "center", padding: "20px",
-              transition: "var(--t)",
-              position: "relative", overflow: "hidden"
-            }}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-            >
-              <input id="pdfInput" type="file" accept="application/pdf" onChange={handlePdfUpload} style={{ display: "none" }} />
-              <div style={{
-                width: "48px", height: "48px", borderRadius: "14px", background: "#fff",
-                display: "grid", placeItems: "center", boxShadow: "var(--sh-1)"
-              }}>
-                <CloudUpload size={22} color="var(--brand)" />
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1.35fr) 360px",
+            gap: 18,
+            alignItems: "start",
+            marginTop: 24,
+          }}
+        >
+          <article className="card flow-card">
+            <div className="card-head">
+              <div>
+                <div className="card-title">강의자료 PDF</div>
+                <div className="card-sub">수업에서 사용할 PDF를 크게 업로드하고 확인합니다.</div>
               </div>
-              <p style={{ marginTop: "12px", fontSize: "16px", fontWeight: "600", margin: "3px 0" }}>
-                {pdfFileName ? pdfFileName : "PDF 파일을 드래그하거나 클릭해 업로드"}
-              </p>
-              <p style={{ marginTop: "4px", fontSize: "12px", color: "var(--zinc-500)", margin: "0" }}>최대 20MB · PDF 형식만</p>
-            </label>
+              <span className={`pill ${pdfFileName ? "pill-success" : "pill-brand"}`}>
+                {pdfFileName ? "업로드 완료" : "PDF only"}
+              </span>
+            </div>
 
-            {pdfFileName && (
-              <div style={{
-                marginTop: "12px", padding: "12px 14px", background: "var(--zinc-50)",
-                borderRadius: "11px", display: "flex", alignItems: "center", gap: "10px"
-              }}>
-                <div style={{
-                  width: "36px", height: "36px", borderRadius: "8px",
-                  background: "var(--danger-50)", color: "var(--danger-600)",
-                  display: "grid", placeItems: "center", fontWeight: "700", fontSize: "11px"
-                }}>PDF</div>
-                <div style={{ flex: "1", minWidth: "0" }}>
-                  <div style={{ fontSize: "13px", fontWeight: "600" }}>{pdfFileName}</div>
-                  <div style={{ fontSize: "11px", color: "var(--zinc-500)" }}>{pdfTotal}p</div>
+            <div className="card-pad-lg">
+              <label
+                htmlFor="pdfInput"
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  minHeight: "460px",
+                  borderRadius: "14px",
+                  backgroundColor: "var(--brand-softer)",
+                  backgroundImage: `
+                    linear-gradient(var(--brand-ring) 1px, transparent 1px),
+                    linear-gradient(90deg, var(--brand-ring) 1px, transparent 1px)
+                  `,
+                  backgroundSize: "30px 30px",
+                  border: "2px dashed var(--brand-2)",
+                  cursor: "pointer",
+                  textAlign: "center",
+                  padding: "32px",
+                  transition: "var(--t)",
+                  position: "relative",
+                  overflow: "hidden",
+                }}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
+              >
+                <input id="pdfInput" type="file" accept="application/pdf" onChange={handlePdfUpload} style={{ display: "none" }} />
+                <div
+                  style={{
+                    width: 72,
+                    height: 72,
+                    borderRadius: 18,
+                    background: "#fff",
+                    display: "grid",
+                    placeItems: "center",
+                    boxShadow: "var(--sh-2)",
+                    color: "var(--brand)",
+                  }}
+                >
+                  <CloudUpload size={32} />
                 </div>
-                <button className="btn btn-ghost btn-sm" type="button" onClick={handlePdfDelete}>
-                  <Trash2 size={14} />
+                <p style={{ marginTop: 18, fontSize: 22, fontWeight: 700, color: "var(--zinc-900)" }}>
+                  {pdfFileName || "PDF 파일을 업로드하세요"}
+                </p>
+                <p style={{ marginTop: 6, fontSize: 13, color: "var(--zinc-500)" }}>
+                  파일을 드래그하거나 클릭해서 선택할 수 있습니다. 최대 20MB · PDF 형식만 지원합니다.
+                </p>
+              </label>
+
+              {pdfFileName && (
+                <div
+                  style={{
+                    marginTop: 14,
+                    padding: "14px 16px",
+                    background: "var(--zinc-50)",
+                    border: "1px solid var(--zinc-200)",
+                    borderRadius: 12,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: 10,
+                      background: "var(--danger-50)",
+                      color: "var(--danger-600)",
+                      display: "grid",
+                      placeItems: "center",
+                      fontWeight: 800,
+                      fontSize: 12,
+                    }}
+                  >
+                    PDF
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>{pdfFileName}</div>
+                    <div style={{ fontSize: 12, color: "var(--zinc-500)", marginTop: 2 }}>{pdfTotal}p</div>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" type="button" onClick={handlePdfDelete}>
+                    <Trash2 size={14} />
+                    삭제
+                  </button>
+                </div>
+              )}
+
+              {pdfUploadError && (
+                <p style={{ marginTop: 10, fontSize: 12, color: "var(--danger)", textAlign: "center" }}>
+                  {pdfUploadError}
+                </p>
+              )}
+            </div>
+          </article>
+
+          <aside style={{ display: "grid", gap: 14 }}>
+            <article className="card">
+              <div className="card-head">
+                <div>
+                  <div className="card-title">수업 코드</div>
+                  <div className="card-sub">PDF 업로드 전후 언제든 발급할 수 있습니다.</div>
+                </div>
+              </div>
+              <div className="card-pad">
+                <div
+                  className="mono"
+                  style={{
+                    minHeight: 86,
+                    display: "grid",
+                    placeItems: "center",
+                    borderRadius: 14,
+                    background: code ? "var(--brand-soft)" : "var(--zinc-50)",
+                    color: code ? "var(--brand-deep)" : "var(--zinc-400)",
+                    fontSize: code ? 42 : 24,
+                    fontWeight: 800,
+                  }}
+                >
+                  {code || "미발급"}
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+                  <button className="btn btn-primary btn-sm" type="button" onClick={handleIssueCode} disabled={!lectureId || issuingCode || !!code}>
+                    <Ticket size={14} />
+                    {issuingCode ? "발급 중..." : code ? "발급 완료" : "코드 발급"}
+                  </button>
+                  <button className="btn btn-ghost btn-sm" type="button" onClick={handleCopyCode} disabled={!code}>
+                    <Copy size={14} />
+                    복사
+                  </button>
+                </div>
+                <button className="btn btn-ghost btn-sm" type="button" disabled={!code} style={{ width: "100%", marginTop: 8 }}>
+                  <QrCode size={14} />
+                  QR 보기
+                </button>
+
+                <div className="join-counter" style={{ marginTop: 14 }}>
+                  <span className="dot" />
+                  {code ? (
+                    <>
+                      지금 <span style={{ fontWeight: 700, color: "var(--zinc-900)" }}>{joinCount}</span>명이 입장하고 있어요
+                    </>
+                  ) : (
+                    "코드를 발급하면 학생 입장이 가능해집니다"
+                  )}
+                </div>
+              </div>
+            </article>
+
+            <article className="card">
+              <div className="card-pad">
+                <div style={{ fontSize: 12, color: "var(--zinc-500)", lineHeight: 1.7 }}>
+                  {courseMeta || "강의 정보가 등록되었습니다."}
+                  <br />
+                  PDF만 업로드되어 있어도 강의실을 열 수 있습니다.
+                </div>
+                <button
+                  className="btn btn-primary btn-lg"
+                  type="button"
+                  disabled={!pdfFileName || !pdfReady}
+                  onClick={handleStartClass}
+                  style={{ width: "100%", marginTop: 14 }}
+                >
+                  <Play size={16} />
+                  PDF 업로드
                 </button>
               </div>
-            )}
-
-            {pdfUploadError && (
-              <p style={{ marginTop: "8px", fontSize: "12px", color: "var(--danger)", textAlign: "center" }}>
-                ⚠ {pdfUploadError}
-              </p>
-            )}
-
-            <hr className="hr-soft" />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontSize: "12px", color: "var(--zinc-500)", lineHeight: "1.6" }}>
-                강의자료 페이지 변경은<br/>학생 화면에 실시간 연동됩니다.
-              </div>
-              <button className="btn btn-primary btn-lg" type="button" disabled={!pdfFileName || !pdfReady} onClick={handleStartClass}>
-                <Play size={16} />
-                수업 시작하기
-              </button>
-            </div>
-          </div>
-        </article>
-      </div>
+            </article>
+          </aside>
+        </div>
       </section>
     </RoleLayout>
   );

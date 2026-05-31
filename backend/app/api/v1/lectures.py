@@ -1,5 +1,5 @@
 from fastapi import APIRouter, status, Depends, File, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 from datetime import datetime
 import os
@@ -230,6 +230,15 @@ def concept_to_response(concept: models.Concept) -> dict:
     }
 
 
+def attach_participant_count(db: Session, lecture: models.Lecture) -> models.Lecture:
+    setattr(
+        lecture,
+        "participant_count",
+        lecture_participant_repository.count_participants_by_lecture(db, lecture.id),
+    )
+    return lecture
+
+
 # 1. POST /api/lectures
 @router.post(
     "",
@@ -307,16 +316,25 @@ def create_lecture_code(
     if error_response:
         return error_response
 
-    if not lecture.class_code:
-        try:
+    try:
+        changed = False
+
+        if not lecture.class_code:
             lecture.class_code = generate_unique_class_code(db)
+            changed = True
+
+        if lecture.status != "ACTIVE":
+            lecture.status = "ACTIVE"
+            changed = True
+
+        if changed:
             lecture_repository.save_lecture(db, lecture)
-        except Exception as e:
-            lecture_repository.rollback(db)
-            return JSONResponse(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                content={"error": f"Failed to create class code: {str(e)}"},
-            )
+    except Exception as e:
+        lecture_repository.rollback(db)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": f"Failed to create class code: {str(e)}"},
+        )
 
     return {
         "lecture_id": lecture.id,
@@ -476,6 +494,42 @@ async def upload_lecture_pdf(
         )
 
 
+@router.get(
+    "/{lecture_id}/pdf",
+    response_class=FileResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Download lecture PDF",
+    tags=[SHARED_LECTURE_TAG],
+)
+def download_lecture_pdf(
+    lecture_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    lecture, error_response = get_accessible_lecture(db, lecture_id, current_user)
+    if error_response:
+        return error_response
+
+    if not lecture.file_name:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "PDF file not found."},
+        )
+
+    file_path = f"uploads/lectures/{lecture_id}/{lecture.file_name}"
+    if not os.path.exists(file_path):
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "Stored PDF file was not found."},
+        )
+
+    return FileResponse(
+        file_path,
+        media_type="application/pdf",
+        filename=lecture.file_name,
+    )
+
+
 # 3. POST /api/lectures/{lecture_id}/pdf/analyze
 @router.post(
     "/{lecture_id}/pdf/analyze",
@@ -570,7 +624,7 @@ def get_lecture_status(
     lecture, error_response = get_accessible_lecture(db, lecture_id, current_user)
     if error_response:
         return error_response
-    return lecture
+    return attach_participant_count(db, lecture)
 
 
 @router.patch(
@@ -599,7 +653,7 @@ def update_lecture_status(
 
     lecture.status = normalized_status
     lecture_repository.save_lecture(db, lecture)
-    return lecture
+    return attach_participant_count(db, lecture)
 
 
 # 5. GET /api/lectures/{lecture_id}/concepts

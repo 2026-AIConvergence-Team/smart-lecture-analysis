@@ -1,209 +1,403 @@
-import { useState, useEffect } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
-import { ChevronLeft, Play } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import {
+  CalendarDays,
+  CheckCircle2,
+  ChevronLeft,
+  Clock,
+  FileText,
+  ListChecks,
+  Play,
+  Plus,
+  Radio,
+  Search,
+  Users,
+} from "lucide-react";
 import RoleLayout from "../../components/RoleLayout.jsx";
 import { getCourseLectures } from "../../api/courseApi.js";
 
-// 주차 번호 → 뱃지 상태: 실제 수업 데이터 기반
-// lectureMap: { [weekNum]: lecture }
-function weekStatus(w, lectureMap) {
-  const lecture = lectureMap[w];
-  if (!lecture) return "idle";
-  if (lecture.status === "active") return "next";   // 진행 중
-  return "done";                                     // 완료된 수업
+function getLectureId(lecture) {
+  return lecture?.lecture_id ?? lecture?.id ?? null;
 }
 
-const STATUS_PILL = {
-  done: <span className="pill pill-neutral">완료</span>,
-  next: <span className="pill pill-brand">진행 중</span>,
-  idle: null,
+function getStatusKey(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "active") return "active";
+  if (["ended", "closed", "done"].includes(normalized)) return "ended";
+  return "ready";
+}
+
+function getLectureNumber(lecture, index) {
+  const match = lecture?.title?.match(/(\d+)\s*주차/);
+  return match ? Number(match[1]) : index + 1;
+}
+
+function hasUploadedPdf(lecture) {
+  return Boolean(lecture?.file_name || lecture?.pdf_url || Number(lecture?.total_pages) > 0);
+}
+
+function formatDate(date) {
+  if (!date) return "날짜 미정";
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  }).format(new Date(date));
+}
+
+function formatTime(time) {
+  if (!time) return "시간 미정";
+  return String(time).slice(0, 5);
+}
+
+function sortLectures(lectures) {
+  return [...lectures].sort((a, b) => {
+    const left = `${a.date || ""} ${a.time || ""}`;
+    const right = `${b.date || ""} ${b.time || ""}`;
+    return right.localeCompare(left);
+  });
+}
+
+const STATUS_VIEW = {
+  active: {
+    label: "진행 중",
+    pill: "pill-success",
+    icon: Radio,
+    action: "강의실 열기",
+  },
+  ended: {
+    label: "종료",
+    pill: "pill-neutral",
+    icon: CheckCircle2,
+    action: "리포트 보기",
+  },
+  ready: {
+    label: "준비됨",
+    pill: "pill-brand",
+    icon: FileText,
+    action: "강의 열기",
+  },
 };
+
+function NewLectureModal({ open, value, onChange, onClose, onSubmit }) {
+  return (
+    <div
+      className={`modal-backdrop${open ? " open" : ""}`}
+      id="newLectureModal"
+      onClick={(event) => event.target.id === "newLectureModal" && onClose()}
+    >
+      <div className="modal">
+        <div className="modal-head">
+          <h3>새 강의 만들기</h3>
+          <p>강의 제목만 입력하면 날짜와 시간은 자동으로 채워집니다.</p>
+        </div>
+        <div className="modal-body">
+          <div className="form-row" style={{ marginTop: 0 }}>
+            <label htmlFor="newLectureTitle">강의 제목</label>
+            <input
+              id="newLectureTitle"
+              className="input"
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") onSubmit();
+              }}
+              placeholder="예: 7주차 학습하는 뇌"
+              autoFocus
+            />
+          </div>
+        </div>
+        <div className="modal-foot">
+          <button className="btn btn-ghost" type="button" onClick={onClose}>
+            취소
+          </button>
+          <button className="btn btn-primary" type="button" onClick={onSubmit} disabled={!value.trim()}>
+            <Plus size={16} />
+            만들기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function TeacherWeekSelectPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
   const {
-    courseId    = null,
-    courseName  = "자료구조론",
-    section     = "01",
-    students    = 32,
-    courseMeta  = "컴퓨터공학과 · 월/수 10:30",
-    currentWeek = 5,   // API 연동 전 fallback
+    courseId = null,
+    courseName = "강의",
+    section = "01",
+    students = 0,
+    courseMeta = "",
+    currentWeek = 1,
   } = location.state || {};
 
-  const [selectedWeek, setSelectedWeek] = useState(null);
-  // weekNum → lecture 매핑 (API로 로드)
-  const [lectureMap, setLectureMap] = useState(null);   // null = 로딩 중
+  const [lectures, setLectures] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [newLectureTitle, setNewLectureTitle] = useState("");
 
   useEffect(() => {
     if (!courseId) {
-      // courseId 없으면 fallback: currentWeek 기준으로 채우기
-      const fallback = {};
-      for (let i = 1; i < currentWeek; i++) fallback[i] = { status: "ended" };
-      if (currentWeek <= 15) fallback[currentWeek] = { status: "active" };
-      setLectureMap(fallback);
+      setLectures([]);
+      setLoading(false);
       return;
     }
+
+    setLoading(true);
+    setError("");
     getCourseLectures(courseId)
-      .then((lectures) => {
-        const map = {};
-        if (Array.isArray(lectures)) {
-          lectures.forEach((l) => {
-            const m = l.title?.match(/(\d+)주차/);
-            if (m) map[+m[1]] = l;
-          });
-        }
-        setLectureMap(map);
-      })
-      .catch(() => {
-        // 실패 시 fallback
-        const fallback = {};
-        for (let i = 1; i < currentWeek; i++) fallback[i] = { status: "ended" };
-        setLectureMap(fallback);
-      });
+      .then((data) => setLectures(Array.isArray(data) ? sortLectures(data) : []))
+      .catch((err) => setError(err.message || "강의 목록을 불러오지 못했습니다."))
+      .finally(() => setLoading(false));
   }, [courseId]);
 
-  const handleStart = () => {
-    if (!selectedWeek) return;
+  const filteredLectures = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    if (!keyword) return lectures;
+    return lectures.filter((lecture) => {
+      const haystack = [
+        lecture.title,
+        lecture.date,
+        lecture.time,
+        lecture.class_code,
+        lecture.status,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(keyword);
+    });
+  }, [lectures, query]);
+
+  const stats = useMemo(() => {
+    const active = lectures.filter((lecture) => getStatusKey(lecture.status) === "active").length;
+    const ended = lectures.filter((lecture) => getStatusKey(lecture.status) === "ended").length;
+    return {
+      total: lectures.length,
+      active,
+      ended,
+      ready: Math.max(lectures.length - active - ended, 0),
+    };
+  }, [lectures]);
+
+  const nextLectureNumber = Math.max(currentWeek, lectures.length + 1);
+
+  const openCreateModal = () => {
+    setNewLectureTitle("");
+    setModalOpen(true);
+  };
+
+  const closeCreateModal = () => {
+    setModalOpen(false);
+    setNewLectureTitle("");
+  };
+
+  const handleCreateLecture = () => {
+    const lectureTitle = newLectureTitle.trim();
+    if (!lectureTitle) return;
+
     navigate("/teacher/setup", {
       state: {
         courseId,
         courseName,
-        week: selectedWeek,
+        week: nextLectureNumber,
         courseMeta,
+        lectureTitle,
+      },
+    });
+  };
+
+  const handleOpenLecture = (lecture, index) => {
+    const lectureId = getLectureId(lecture);
+    const status = getStatusKey(lecture.status);
+    const weekNumber = getLectureNumber(lecture, index);
+
+    if (status === "ended") {
+      navigate("/teacher/report", { state: { lectureId } });
+      return;
+    }
+
+    if (!hasUploadedPdf(lecture)) {
+      navigate("/teacher/setup", {
+        state: {
+          courseId,
+          courseName,
+          week: weekNumber,
+          courseMeta,
+          lectureId,
+          lectureTitle: lecture.title,
+          classCode: lecture.class_code || "",
+        },
+      });
+      return;
+    }
+
+    navigate("/teacher/live", {
+      state: {
+        code: lecture.class_code || "------",
+        courseId,
+        courseName,
+        section,
+        students,
+        courseMeta,
+        week: weekNumber,
+        lectureId,
+        pdfFileName: lecture.file_name || null,
+        pdfTotal: lecture.total_pages || 0,
       },
     });
   };
 
   return (
     <RoleLayout role="teacher">
-      <section className="content">
-        {/* 헤더 */}
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 24 }}>
+      <section className="content lecture-list-page">
+        <div className="lecture-list-header">
           <div>
-            <p className="eyebrow">Week Selection</p>
-            <h1 className="page-title">{courseName} · 주차 선택</h1>
-            <p className="page-sub">수업을 진행할 주차를 선택한 뒤 강의 설정을 시작하세요.</p>
+            <p className="eyebrow">Lecture Library</p>
+            <h1 className="page-title">{courseName} 강의 목록</h1>
+            <p className="page-sub">
+              과목에 등록된 강의를 한 곳에서 확인하고, 진행 중인 강의나 리포트로 바로 이동할 수 있습니다.
+            </p>
           </div>
-          <button className="btn btn-ghost" type="button" onClick={() => navigate("/teacher/courses")}>
-            <ChevronLeft size={14} />
-            강의 목록
-          </button>
-        </div>
-
-        {/* 과목 메타 요약 */}
-        <div style={{
-          marginTop: 20,
-          padding: "14px 18px",
-          background: "var(--zinc-50)",
-          borderRadius: 12,
-          border: "1px solid var(--zinc-200)",
-          display: "flex",
-          alignItems: "center",
-          gap: 16,
-        }}>
-          <div style={{
-            width: 40, height: 40, borderRadius: 10,
-            background: "var(--brand-softer)",
-            color: "var(--brand)",
-            display: "grid", placeItems: "center",
-            fontSize: 13, fontWeight: 700,
-          }}>
-            {courseName.slice(0, 2)}
-          </div>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--zinc-900)" }}>
-              {courseName}
-              <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 500, color: "var(--zinc-500)" }}>
-                {section}분반
-              </span>
-            </div>
-            <div style={{ fontSize: 12, color: "var(--zinc-500)", marginTop: 2 }}>
-              {courseMeta} · 수강생 {students}명
-            </div>
+          <div className="lecture-list-header-actions">
+            <button className="btn btn-ghost" type="button" onClick={() => navigate("/teacher/courses")}>
+              <ChevronLeft size={14} />
+              과목 목록
+            </button>
+            <button className="btn btn-primary" type="button" onClick={openCreateModal} disabled={!courseId}>
+              <Plus size={16} />
+              새 강의
+            </button>
           </div>
         </div>
 
-        {/* 주차 그리드 */}
-        <div style={{ marginTop: 24 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--zinc-700)", marginBottom: 12 }}>
-            전체 15주차
+        <div className="lecture-course-band">
+          <div className="lecture-course-mark">{courseName.slice(0, 2)}</div>
+          <div className="lecture-course-info">
+            <strong>{courseName}</strong>
+            <span>{[courseMeta, `${section}분반`].filter(Boolean).join(" · ")}</span>
           </div>
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(5, 1fr)",
-            gap: 10,
-          }}>
-            {Array.from({ length: 15 }, (_, i) => i + 1).map((w) => {
-              const st = lectureMap ? weekStatus(w, lectureMap) : "idle";
-              const isSelected = selectedWeek === w;
+          <div className="lecture-course-stats">
+            <span>
+              <Users size={14} />
+              {students}명
+            </span>
+            <span>
+              <ListChecks size={14} />
+              {stats.total}개 강의
+            </span>
+          </div>
+        </div>
+
+        <div className="lecture-toolbar">
+          <div className="lecture-search">
+            <Search size={16} />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="강의명, 날짜, 코드 검색"
+            />
+          </div>
+          <div className="lecture-stat-row">
+            <span className="lecture-stat active">{stats.active} 진행</span>
+            <span className="lecture-stat ready">{stats.ready} 준비</span>
+            <span className="lecture-stat ended">{stats.ended} 종료</span>
+          </div>
+        </div>
+
+        {loading && (
+          <div className="lecture-state-card">
+            <div className="loader" />
+            <strong>강의 목록을 불러오는 중입니다</strong>
+            <span>잠시만 기다려 주세요.</span>
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="lecture-state-card danger">
+            <strong>목록을 불러오지 못했습니다</strong>
+            <span>{error}</span>
+          </div>
+        )}
+
+        {!loading && !error && filteredLectures.length === 0 && (
+          <div className="lecture-empty">
+            <div className="lecture-empty-icon">
+              <FileText size={24} />
+            </div>
+            <strong>{lectures.length === 0 ? "아직 등록된 강의가 없습니다" : "검색 결과가 없습니다"}</strong>
+            <span>
+              {lectures.length === 0
+                ? "새 강의를 만들어 자료 업로드와 수업 코드를 준비해 보세요."
+                : "다른 키워드로 다시 검색해 보세요."}
+            </span>
+            {lectures.length === 0 && (
+              <button className="btn btn-primary" type="button" onClick={openCreateModal} disabled={!courseId}>
+                <Plus size={16} />
+                첫 강의 만들기
+              </button>
+            )}
+          </div>
+        )}
+
+        {!loading && !error && filteredLectures.length > 0 && (
+          <div className="lecture-list-grid">
+            {filteredLectures.map((lecture, index) => {
+              const status = getStatusKey(lecture.status);
+              const view = STATUS_VIEW[status];
+              const StatusIcon = view.icon;
+              const lectureNo = getLectureNumber(lecture, index);
+
               return (
-                <button
-                  key={w}
-                  type="button"
-                  onClick={() => setSelectedWeek(w)}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "flex-start",
-                    gap: 10,
-                    padding: "14px 16px",
-                    borderRadius: 12,
-                    border: isSelected
-                      ? "2px solid var(--brand)"
-                      : "1.5px solid var(--zinc-200)",
-                    background: isSelected ? "var(--brand-softer)" : "#fff",
-                    cursor: "pointer",
-                    transition: "var(--t)",
-                    textAlign: "left",
-                  }}
-                >
-                  <div style={{
-                    fontSize: 20,
-                    fontWeight: 700,
-                    color: isSelected ? "var(--brand-deep)" : "var(--zinc-900)",
-                    lineHeight: 1,
-                  }}>
-                    {w}주차
+                <article className={`lecture-card ${status}`} key={getLectureId(lecture) || `${lecture.title}-${index}`}>
+                  <div className="lecture-card-top">
+                    <div className="lecture-number">{lectureNo}</div>
+                    <span className={`pill ${view.pill}`}>
+                      <StatusIcon size={13} />
+                      {view.label}
+                    </span>
                   </div>
-                  <div style={{ minHeight: 22 }}>
-                    {STATUS_PILL[st]}
+                  <div className="lecture-card-body">
+                    <h2>{lecture.title || `${lectureNo}번째 강의`}</h2>
+                    <div className="lecture-meta-list">
+                      <span>
+                        <CalendarDays size={14} />
+                        {formatDate(lecture.date)}
+                      </span>
+                      <span>
+                        <Clock size={14} />
+                        {formatTime(lecture.time)}
+                      </span>
+                    </div>
                   </div>
-                </button>
+                  <div className="lecture-card-footer">
+                    <span className="lecture-code">
+                      코드 <strong>{lecture.class_code || "미발급"}</strong>
+                    </span>
+                    <button className="btn btn-soft btn-sm" type="button" onClick={() => handleOpenLecture(lecture, index)}>
+                      <Play size={13} />
+                      {view.action}
+                    </button>
+                  </div>
+                </article>
               );
             })}
           </div>
-        </div>
-
-        {/* 하단 액션 */}
-        <div style={{
-          marginTop: 24,
-          padding: "16px 20px",
-          background: "#fff",
-          border: "1px solid var(--zinc-200)",
-          borderRadius: 14,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 16,
-        }}>
-          <div style={{ fontSize: 13, color: "var(--zinc-600)" }}>
-            {selectedWeek
-              ? <><span style={{ fontWeight: 700, color: "var(--zinc-900)" }}>{selectedWeek}주차</span>를 선택했습니다. 강의 설정 페이지로 이동합니다.</>
-              : "주차를 선택해 주세요."}
-          </div>
-          <button
-            className="btn btn-primary btn-lg"
-            type="button"
-            disabled={!selectedWeek}
-            onClick={handleStart}
-          >
-            <Play size={16} />
-            강의 설정 시작
-          </button>
-        </div>
+        )}
       </section>
+
+      <NewLectureModal
+        open={modalOpen}
+        value={newLectureTitle}
+        onChange={setNewLectureTitle}
+        onClose={closeCreateModal}
+        onSubmit={handleCreateLecture}
+      />
     </RoleLayout>
   );
 }

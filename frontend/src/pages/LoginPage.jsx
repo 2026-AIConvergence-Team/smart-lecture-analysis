@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Briefcase, GraduationCap, LogIn } from "lucide-react";
 import { login, getMe } from "../api/authApi.js";
+import linkOnLogo from "../assets/linkON_logo.svg";
 
 function LoginPage() {
   const navigate = useNavigate();
@@ -11,34 +12,71 @@ function LoginPage() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+
     if (!form.email || !form.password) {
       setMessage("이메일과 비밀번호를 모두 입력해 주세요.");
       return;
     }
+
     setMessage("");
     setLoading(true);
-    try {
-      // 1. 로그인 → access_token 받기
-      const tokenData = await login({ email: form.email, password: form.password });
-      localStorage.setItem("access_token", tokenData.access_token);
 
-      // 2. 내 정보 조회 → role 확인
-      const me = await getMe();
+    try {
+      // 이전 로그인 잔여 토큰 제거
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("teacher_access_token");
+      localStorage.removeItem("student_access_token");
+      localStorage.removeItem("user_role");
+      localStorage.removeItem("user_name");
+      localStorage.removeItem("user_email");
+
+      sessionStorage.removeItem("access_token");
+      sessionStorage.removeItem("user_role");
+
+      // 1. 로그인 → access_token 받기
+      const tokenData = await login({
+        email: form.email,
+        password: form.password,
+      });
+
+      const accessToken = tokenData.access_token;
+
+      if (!accessToken) {
+        throw new Error("로그인 토큰을 받지 못했습니다.");
+      }
+
+      // 2. getMe 전에 새 토큰을 sessionStorage/localStorage에 먼저 저장
+      localStorage.setItem("access_token", accessToken);
+      sessionStorage.setItem("access_token", accessToken);
+
+      // 3. 새 토큰으로 내 정보 조회
+      const me = await getMe(accessToken);
+
       localStorage.setItem("user_role", me.role);
       localStorage.setItem("user_name", me.name);
       localStorage.setItem("user_email", me.email);
-      // 역할별 토큰 분리 저장 (같은 브라우저에서 교수+학생 동시 테스트 지원)
-      localStorage.setItem(`${me.role}_access_token`, tokenData.access_token);
-      // 탭별 세션 저장 — 같은 브라우저에서 교수/학생 동시 로그인 시 토큰 충돌 방지
-      sessionStorage.setItem("access_token", tokenData.access_token);
+
+      // 역할별 토큰 분리 저장
+      localStorage.setItem(`${me.role}_access_token`, accessToken);
+
       sessionStorage.setItem("user_role", me.role);
 
-      // 3. role에 따라 페이지 이동
-      const destination = me.role === "teacher" ? "/teacher/courses" : "/student/courses";
+      const destination =
+        me.role === "teacher" ? "/teacher/courses" : "/student/courses";
+
       navigate(destination);
     } catch (err) {
       setMessage(err.message || "로그인에 실패했습니다. 이메일과 비밀번호를 확인해 주세요.");
+
       localStorage.removeItem("access_token");
+      localStorage.removeItem("teacher_access_token");
+      localStorage.removeItem("student_access_token");
+      localStorage.removeItem("user_role");
+      localStorage.removeItem("user_name");
+      localStorage.removeItem("user_email");
+
+      sessionStorage.removeItem("access_token");
+      sessionStorage.removeItem("user_role");
     } finally {
       setLoading(false);
     }
@@ -57,18 +95,8 @@ function LoginPage() {
         {/* ── 왼쪽: 브랜딩 영역 ── */}
         <div className="login-left">
           <div>
-            <div className="brand-mark">
-              <div className="logo">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ width: 22, height: 22 }}>
-                  <path d="M12 2 L19 6 V14 L12 18 L5 14 V6 Z" stroke="#fff" strokeWidth="1.8" strokeLinejoin="round" />
-                  <circle cx="12" cy="11" r="2.5" fill="#fff" />
-                  <path d="M14 13 L17 16" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
-              </div>
-              <div>
-                <div className="wordmark">QuizSync</div>
-                <span className="sub">성신여자대학교 · 수업 이해도 플랫폼</span>
-              </div>
+            <div className="brand-mark login-brand-mark">
+              <img className="login-logo-img" src={linkOnLogo} alt="linkON" />
             </div>
           </div>
 
@@ -98,19 +126,35 @@ function LoginPage() {
           </div>
 
           <div className="login-footer-text">
-            © 2026 QuizSync · Powered for SungShin Women's University<br />
+            © 2026 linkON · Powered for SungShin Women's University<br />
             돈암수정캠퍼스 · 02844 서울특별시 성북구 보문로 34다길 2
           </div>
         </div>
 
         {/* ── 오른쪽: 로그인 카드 ── */}
         <div className="login-right">
-          <div style={{ position: "relative", width: "100%", display: "flex", justifyContent: "center" }}>
-            <div className="float-chip" style={{ top: -20, left: 0 }}>
-              <span className="dot" style={{ background: "#10b981" }} /> 응답 23/32 · Live
+          <div className="login-card-wrap">
+            <div className="float-chip float-chip-live">
+              <span className="status-orb">
+                <span className="dot" />
+              </span>
+              <span className="float-chip-copy">
+                <strong>실시간 반응</strong>
+                <small>수집 중</small>
+              </span>
+              <span className="float-chip-meter" aria-hidden="true">
+                <span />
+              </span>
             </div>
-            <div className="float-chip" style={{ bottom: -20, right: 0 }}>
-              <span className="dot" style={{ background: "#7C5BC4" }} /> 5주차 리포트 준비됨
+            <div className="float-chip float-chip-report">
+              <span className="status-orb">
+                <span className="dot" />
+              </span>
+              <span className="float-chip-copy">
+                <strong>5주차 리포트</strong>
+                <small>준비됨</small>
+              </span>
+              <span className="float-chip-badge" aria-hidden="true">Ready</span>
             </div>
 
             <div className="login-card" style={{ width: "459.5px" }}>

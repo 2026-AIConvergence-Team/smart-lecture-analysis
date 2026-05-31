@@ -2839,8 +2839,7 @@ def split_page_context_sentences(page_text: str) -> List[str]:
     """
     PageContent의 원문 텍스트를 AI 출제용 문장/bullet 단위로 나눕니다.
     """
-    cleaned = strip_slide_artifacts(page_text)
-    cleaned = cleaned.replace("\r", "\n")
+    cleaned = str(page_text or "").replace("\r", "\n")
 
     cleaned = re.sub(
         r"Multimedia\s+VLSI\s+Lab\.\s*\d*",

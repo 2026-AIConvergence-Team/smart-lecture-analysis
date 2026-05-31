@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, status
@@ -15,6 +16,7 @@ from app.repositories import (
     quiz_generation_job_repository,
     quiz_repository,
     quiz_set_repository,
+    submission_answer_repository,
     submission_repository,
 )
 from app.services.quiz.quiz_generation import (
@@ -92,6 +94,35 @@ def get_correct_choice_number(quiz: models.Quiz) -> int | None:
             return index
 
     return None
+
+
+def get_selected_option_index(selected: object, options: list[str]) -> int | None:
+    selected_text = str(selected or "").strip()
+    if not selected_text:
+        return None
+
+    choice_number = parse_choice_number(selected_text, len(options))
+    if choice_number is not None:
+        return choice_number - 1
+
+    for index, option in enumerate(options):
+        if str(option or "").strip() == selected_text:
+            return index
+
+    return None
+
+
+def is_selected_answer_correct(quiz: models.Quiz, selected: object) -> bool:
+    selected_text = str(selected or "").strip()
+    options = deserialize_options(quiz.options)
+
+    if options:
+        selected_index = get_selected_option_index(selected_text, options)
+        correct_index = get_selected_option_index(quiz.answer, options)
+        if selected_index is not None and correct_index is not None:
+            return selected_index == correct_index
+
+    return selected_text == str(quiz.answer or "").strip()
 
 
 def quiz_model_supports_generation_job_id() -> bool:
@@ -351,7 +382,8 @@ def get_page_context_map(
             continue
 
         text = (
-            getattr(row, "text", None)
+            getattr(row, "text_content", None)
+            or getattr(row, "text", None)
             or getattr(row, "content", None)
             or getattr(row, "page_text", None)
             or getattr(row, "raw_text", None)
@@ -1013,6 +1045,104 @@ def get_lecture_quiz_sets(
     }
 
 
+@router.get(
+    "/api/quiz-sets/{set_id}/report",
+    response_model=schemas.QuizSetReportResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get quiz set submission report",
+    tags=[TEACHER_QUIZ_TAG],
+)
+def get_quiz_set_report(
+    set_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    teacher_error = require_teacher_user(current_user)
+    if teacher_error:
+        return teacher_error
+
+    quiz_set = quiz_set_repository.get_quiz_set_by_id(db, set_id)
+    if not quiz_set:
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "Quiz set not found.",
+        )
+
+    quizzes = quiz_repository.get_lecture_quizzes(
+        db=db,
+        lecture_id=quiz_set.lecture_id,
+        set_id=quiz_set.id,
+    )
+    submissions = submission_repository.get_submissions_by_set(db, quiz_set.id)
+    submission_ids = {submission.id for submission in submissions}
+
+    total_answers = 0
+    total_correct = 0
+    quiz_reports = []
+
+    for quiz in quizzes:
+        options = deserialize_options(quiz.options)
+        option_counts = [0 for _ in options]
+        answers = [
+            answer
+            for answer in submission_answer_repository.get_answers_by_quiz(db, quiz.id)
+            if answer.submission_id in submission_ids
+        ]
+
+        correct_count = 0
+        wrong_answers = []
+
+        for answer in answers:
+            selected_index = get_selected_option_index(answer.selected, options)
+            if selected_index is not None:
+                option_counts[selected_index] += 1
+
+            is_correct = is_selected_answer_correct(quiz, answer.selected)
+            if is_correct:
+                correct_count += 1
+            else:
+                wrong_answers.append(str(answer.selected or "").strip())
+
+        answer_count = len(answers)
+        wrong_count = answer_count - correct_count
+        total_answers += answer_count
+        total_correct += correct_count
+
+        top_wrong_answer = None
+        top_wrong_count = 0
+        if wrong_answers:
+            top_wrong_answer, top_wrong_count = Counter(wrong_answers).most_common(1)[0]
+
+        quiz_reports.append(
+            {
+                "quiz_id": quiz.id,
+                "total_answers": answer_count,
+                "correct_count": correct_count,
+                "wrong_count": wrong_count,
+                "correct_rate": (correct_count / answer_count * 100) if answer_count else 0.0,
+                "wrong_rate": (wrong_count / answer_count * 100) if answer_count else 0.0,
+                "option_counts": option_counts,
+                "top_wrong_answer": top_wrong_answer,
+                "top_wrong_count": top_wrong_count,
+            }
+        )
+
+    total_wrong = total_answers - total_correct
+
+    return {
+        "set_id": quiz_set.id,
+        "lecture_id": quiz_set.lecture_id,
+        "status": quiz_set.status,
+        "total_submissions": len(submissions),
+        "total_answers": total_answers,
+        "correct_count": total_correct,
+        "wrong_count": total_wrong,
+        "correct_rate": (total_correct / total_answers * 100) if total_answers else 0.0,
+        "wrong_rate": (total_wrong / total_answers * 100) if total_answers else 0.0,
+        "quizzes": quiz_reports,
+    }
+
+
 @router.post(
     "/api/lectures/{lecture_id}/quiz-sets/{set_id}/submissions",
     response_model=schemas.SubmissionResponse,
@@ -1109,26 +1239,26 @@ def submit_quiz_set_answers(
 
         quiz = quiz_map[answer.quiz_id]
 
-        if is_multiple_choice_quiz(quiz.quiz_type):
-            options = deserialize_options(quiz.options)
-            choice_number = parse_choice_number(selected, len(options))
-            if choice_number is None:
+        options = deserialize_options(quiz.options)
+        if options:
+            selected_index = get_selected_option_index(selected, options)
+            if selected_index is None:
                 return error_response(
                     status.HTTP_400_BAD_REQUEST,
                     (
-                        "selected must be a 1-based option number for "
-                        f"multiple-choice quizzes. quiz_id={quiz.id}"
+                        "selected must be a 1-based option number or option text "
+                        f"for quizzes with options. quiz_id={quiz.id}"
                     ),
                 )
 
-            correct_choice_number = get_correct_choice_number(quiz)
-            if correct_choice_number is None:
+            correct_index = get_selected_option_index(quiz.answer, options)
+            if correct_index is None:
                 return error_response(
                     status.HTTP_500_INTERNAL_SERVER_ERROR,
                     f"Quiz answer is not included in options. quiz_id={quiz.id}",
                 )
 
-            is_correct = choice_number == correct_choice_number
+            is_correct = selected_index == correct_index
         else:
             is_correct = selected == str(quiz.answer or "").strip()
 
