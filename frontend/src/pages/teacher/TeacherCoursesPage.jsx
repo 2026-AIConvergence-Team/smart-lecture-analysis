@@ -14,13 +14,23 @@ function deriveCourseStatus(course) {
 
 const STATUS_PILL = {
   live: (
-    <span className="status-tag teacher-course-status pill pill-success">
-      <span className="dot" />
-      진행 중
+    <span className="status-tag teacher-course-status course-status-badge status-live">
+      <span className="course-status-dot" />
+      <span>진행 중</span>
     </span>
   ),
-  idle: <span className="status-tag teacher-course-status pill pill-brand">대기</span>,
-  done: <span className="status-tag teacher-course-status pill pill-neutral">종료</span>,
+  idle: (
+    <span className="status-tag teacher-course-status course-status-badge status-idle">
+      <span className="course-status-dot" />
+      <span>대기</span>
+    </span>
+  ),
+  done: (
+    <span className="status-tag teacher-course-status course-status-badge status-done">
+      <span className="course-status-dot" />
+      <span>종료</span>
+    </span>
+  ),
 };
 
 const CTA_LABEL = {

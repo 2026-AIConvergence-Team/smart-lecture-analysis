@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Briefcase, GraduationCap, LogIn } from "lucide-react";
 import { login, getMe } from "../api/authApi.js";
+import linkOnLogo from "../assets/linkON_logo.svg";
 
 function LoginPage() {
   const navigate = useNavigate();
@@ -94,18 +95,8 @@ function LoginPage() {
         {/* ── 왼쪽: 브랜딩 영역 ── */}
         <div className="login-left">
           <div>
-            <div className="brand-mark">
-              <div className="logo">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ width: 22, height: 22 }}>
-                  <path d="M12 2 L19 6 V14 L12 18 L5 14 V6 Z" stroke="#fff" strokeWidth="1.8" strokeLinejoin="round" />
-                  <circle cx="12" cy="11" r="2.5" fill="#fff" />
-                  <path d="M14 13 L17 16" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
-              </div>
-              <div>
-                <div className="wordmark">QuizSync</div>
-                <span className="sub">성신여자대학교 · 수업 이해도 플랫폼</span>
-              </div>
+            <div className="brand-mark login-brand-mark">
+              <img className="login-logo-img" src={linkOnLogo} alt="linkON" />
             </div>
           </div>
 
@@ -135,19 +126,35 @@ function LoginPage() {
           </div>
 
           <div className="login-footer-text">
-            © 2026 QuizSync · Powered for SungShin Women's University<br />
+            © 2026 linkON · Powered for SungShin Women's University<br />
             돈암수정캠퍼스 · 02844 서울특별시 성북구 보문로 34다길 2
           </div>
         </div>
 
         {/* ── 오른쪽: 로그인 카드 ── */}
         <div className="login-right">
-          <div style={{ position: "relative", width: "100%", display: "flex", justifyContent: "center" }}>
-            <div className="float-chip" style={{ top: -20, left: 0 }}>
-              <span className="dot" style={{ background: "#10b981" }} /> 응답 23/32 · Live
+          <div className="login-card-wrap">
+            <div className="float-chip float-chip-live">
+              <span className="status-orb">
+                <span className="dot" />
+              </span>
+              <span className="float-chip-copy">
+                <strong>실시간 반응</strong>
+                <small>수집 중</small>
+              </span>
+              <span className="float-chip-meter" aria-hidden="true">
+                <span />
+              </span>
             </div>
-            <div className="float-chip" style={{ bottom: -20, right: 0 }}>
-              <span className="dot" style={{ background: "#7C5BC4" }} /> 5주차 리포트 준비됨
+            <div className="float-chip float-chip-report">
+              <span className="status-orb">
+                <span className="dot" />
+              </span>
+              <span className="float-chip-copy">
+                <strong>5주차 리포트</strong>
+                <small>준비됨</small>
+              </span>
+              <span className="float-chip-badge" aria-hidden="true">Ready</span>
             </div>
 
             <div className="login-card" style={{ width: "459.5px" }}>
